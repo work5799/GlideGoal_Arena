@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GlideGoal Arena - 2D Multiplayer Physics Game</title>
+  <meta name="description" content="A real-time multiplayer 2D top-down physics-based soccer game where players use their cursor discs to push the ball and score goals.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Game Arena Viewport -->
+  <div class="game-container" id="gameContainer">
+    
+    <!-- Top HUD overlay (Active during match play) -->
+    <div class="game-hud hidden" id="gameHUD">
+      <!-- Team A scoreboard -->
+      <div class="hud-team-score team-a">
+        <span class="hud-team-name team-a-text">team a</span>
+        <div class="hud-score-box team-a-bg" id="scoreA">0</div>
+      </div>
+      
+      <!-- Time block -->
+      <div class="hud-timer-block">
+        <span class="hud-timer-label">TIME REMAINING</span>
+        <div class="hud-timer-value" id="hudTimer">1:00</div>
+      </div>
+
+      <!-- Team B scoreboard -->
+      <div class="hud-team-score team-b">
+        <div class="hud-score-box team-b-bg" id="scoreB">0</div>
+        <span class="hud-team-name team-b-text">team b</span>
+      </div>
+    </div>
+
+    <!-- Player Stats Overlay (Top Left corner during match) -->
+    <div class="player-stats-panel hidden" id="playerStatsPanel">
+      <div class="stats-header">PLAYER STATS</div>
+      <div id="statsList" class="stats-list">
+        <!-- Filled dynamically -->
+      </div>
+    </div>
+
+    <!-- Announcement Overlay (Goal announcements) -->
+    <div class="announcement" id="announcement">GOAL!</div>
+
+    <!-- 2D Pitch Canvas -->
+    <canvas id="gameCanvas" class="hidden"></canvas>
+
+    <!-- STEP 1: Login overlay -->
+    <div class="overlay" id="loginMenu">
+      <div class="panel">
+        <h1>GlideGoal Arena</h1>
+        <p class="subtitle">Enter name to join match</p>
+        
+        <div style="margin-bottom: 24px; text-align: left;">
+          <input type="text" id="playerNameInput" placeholder="Enter username..." style="width: 100%; padding: 14px 20px; font-size: 1.1rem; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; color: #fff; font-family: inherit; outline: none; transition: border-color 0.2s;">
+        </div>
+
+        <button class="btn" onclick="showLobbySelect()">Continue</button>
+      </div>
+    </div>
+
+    <!-- STEP 2: Lobby selector -->
+    <div class="overlay hidden" id="lobbyMenu">
+      <div class="panel">
+        <h2>Match Lobby</h2>
+        <p class="subtitle">Host a room or join room code</p>
+        
+        <button class="btn" onclick="createRoom()">Create Room</button>
+        
+        <div style="margin: 20px 0; border-top: 1px solid rgba(255, 255, 255, 0.08); position: relative;">
+          <span style="position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: #161c24; padding: 0 10px; font-size: 0.8rem; color: var(--text-muted);">OR</span>
+        </div>
+
+        <div style="margin-bottom: 14px; display: flex; gap: 10px;">
+          <input type="text" id="roomCodeInput" placeholder="ROOM CODE" maxlength="6" style="flex: 1; padding: 14px; font-size: 1.1rem; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; color: #fff; font-family: inherit; text-transform: uppercase; outline: none; text-align: center;">
+          <button class="btn" onclick="joinRoom()" style="margin-bottom: 0; width: auto; padding: 14px 24px; background: var(--accent-blue); box-shadow: 0 0 15px rgba(0, 210, 255, 0.35);">Join</button>
+        </div>
+
+        <div id="lobbyError" style="color: var(--accent-red); font-size: 0.9rem; margin-bottom: 14px; min-height: 20px;"></div>
+
+        <button class="btn btn-secondary" onclick="backToLogin()">Back</button>
+      </div>
+    </div>
+
+    <!-- STEP 3: Waiting Room (Lobby Slots Selection matching mockup screenshot) -->
+    <div class="overlay hidden" id="waitingRoom">
+      <div class="panel lobby-panel">
+        
+        <!-- Top bar of waiting room -->
+        <div class="lobby-header">
+          <div class="lobby-title-wrap">
+            <span class="lobby-title">waiting room</span>
+            <div class="lobby-code-box">
+              <span class="code-label">room code:</span>
+              <span class="code-value" id="displayRoomCode">------</span>
+              <button class="copy-btn" onclick="copyRoomCode()" title="Copy room code">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="lobby-config-container">
+            <div class="lobby-config-wrap">
+              <span class="config-label">match time</span>
+              <select id="matchTimeSelect" onchange="changeMatchTime(this.value)">
+                <option value="60" selected>60s</option>
+                <option value="90">90s</option>
+                <option value="120">120s</option>
+              </select>
+            </div>
+            
+            <div class="lobby-config-wrap">
+              <span class="config-label">player count</span>
+              <select id="maxPlayersSelect" onchange="changeMaxPlayers(this.value)">
+                <option value="2" selected>1v1 (2)</option>
+                <option value="4">2v2 (4)</option>
+                <option value="6">3v3 (6)</option>
+                <option value="8">4v4 (8)</option>
+                <option value="10">5v5 (10) ⚡AI GK</option>
+              </select>
+            </div>
+
+            <div class="lobby-config-wrap">
+              <span class="config-label">ai goalkeepers</span>
+              <select id="aiGoalkeepersSelect" onchange="changeAiGoalkeepers(this.value)">
+                <option value="false" selected>Disabled</option>
+                <option value="true">Enabled</option>
+              </select>
+            </div>
+
+            <div class="lobby-config-wrap">
+              <span class="config-label">ball speed</span>
+              <select id="ballSpeedSelect" onchange="changeBallSpeed(this.value)">
+                <option value="20" selected>Max (20)</option>
+                <option value="15">Medium (15)</option>
+                <option value="10">Slow (10)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Waiting room slots columns grid -->
+        <div class="lobby-slots-grid">
+          <!-- Column 1: Team A -->
+          <div class="slot-card team-a-card">
+            <div class="slot-card-header">
+              <span class="card-indicator team-a-bullet"></span>
+              <span class="card-title team-a-text">team a</span>
+              <span class="card-count" id="countTeamA">0</span>
+            </div>
+            <div class="slot-card-content" id="listTeamA">
+              <!-- Dynamically populated or empty -->
+            </div>
+          </div>
+
+          <!-- Column 2: Unassigned -->
+          <div class="slot-card unassigned-card">
+            <div class="slot-card-header">
+              <span class="card-indicator unassigned-bullet"></span>
+              <span class="card-title">unassigned</span>
+              <span class="card-count" id="countUnassigned">0</span>
+            </div>
+            <div class="slot-card-content" id="listUnassigned">
+              <!-- Dynamically filled -->
+            </div>
+            <div class="slot-card-actions">
+              <button class="join-slot-btn btn-secondary" onclick="joinSlot('unassigned')">Leave Team</button>
+            </div>
+          </div>
+
+          <!-- Column 3: Team B -->
+          <div class="slot-card team-b-card">
+            <div class="slot-card-header">
+              <span class="card-indicator team-b-bullet"></span>
+              <span class="card-title team-b-text">team b</span>
+              <span class="card-count" id="countTeamB">0</span>
+            </div>
+            <div class="slot-card-content" id="listTeamB">
+              <!-- Dynamically populated or empty -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Start Match action -->
+        <button class="btn start-match-btn" id="startMatchBtn" onclick="sendStartMatch()" disabled>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 8px;"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+          Start Match
+        </button>
+      </div>
+    </div>
+
+    <!-- Match GameOver Overlay screen -->
+    <div class="overlay hidden" id="gameOverPanel">
+      <div class="panel gameover-panel">
+        <div class="gameover-header">
+          <p class="gameover-over-label">MATCH OVER</p>
+          <h2 class="gameover-verdict" id="matchVerdict">Team A Wins!</h2>
+        </div>
+        <div class="gameover-scoreboard">
+          <div class="gsb-team">
+            <span class="gsb-label team-a-text">TEAM A</span>
+            <span class="gsb-score team-a-text" id="finalScoreA">0</span>
+          </div>
+          <div class="gsb-colon">:</div>
+          <div class="gsb-team gsb-team-right">
+            <span class="gsb-score team-b-text" id="finalScoreB">0</span>
+            <span class="gsb-label team-b-text">TEAM B</span>
+          </div>
+        </div>
+        <div class="gameover-stats-wrap">
+          <div class="gst-header">
+            <span>Player</span><span>Team</span><span>⚽ Goals</span><span>👆 Touches</span>
+          </div>
+          <div id="gameoverStatsList" class="gst-body"></div>
+        </div>
+        <button class="btn start-match-btn" onclick="backToLobbyRoom()" style="margin-top:14px;">
+          ← Back to Waiting Room
+        </button>
+      </div>
+    </div>
+
+    <!-- Corner Audio Toggle -->
+    <div class="sound-toggle" id="soundToggle" title="Toggle audio effects">
+      <span id="soundIcon" style="font-size: 1.1rem;">🔊</span>
+    </div>
+
+  </div>
+
+  <!-- Realtime core socket libraries -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
+
