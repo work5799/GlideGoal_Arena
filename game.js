@@ -306,13 +306,18 @@ function startGuestSync(code) {
     const stateWrapper = await fbRead(`live_games/${code}/state`);
     if (stateWrapper && stateWrapper.roomState) {
       const rs = stateWrapper.roomState;
-      // Ensure self stays present locally in unassigned if Host hasn't synced us yet
-      if (myId && !rs.players.some(p => p.id === myId)) {
-        rs.players.push({
-          id: myId, name: playerName, slot: 'unassigned',
-          x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: false, flag: 'BAN',
-          stats: { touches: 0, goals: 0 }, joinedAt: Date.now()
-        });
+      // Ensure self stays present locally with selected slot if Host hasn't synced us yet
+      if (myId) {
+        let me = rs.players.find(p => p.id === myId);
+        if (!me) {
+          rs.players.push({
+            id: myId, name: playerName, slot: mySlot || 'unassigned',
+            x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: false, flag: 'BAN',
+            stats: { touches: 0, goals: 0 }, joinedAt: Date.now()
+          });
+        } else if (mySlot && mySlot !== 'unassigned' && me.slot === 'unassigned') {
+          me.slot = mySlot;
+        }
       }
       handleMessage({ type: 'room-state-updated', roomState: rs });
       if (stateWrapper.event && stateWrapper.event !== 'room-state-updated') {
@@ -419,7 +424,7 @@ function updateAiGoalkeepers(rs) {
     if (!isTeamA && !isTeamB) return;
 
     const isSuperGK = (isTeamA && superTeam === 'A') || (isTeamB && superTeam === 'B');
-    let tx, ty, speedLimit = isSuperGK ? 18.0 : 11.0;
+    let tx, ty, speedLimit = isSuperGK ? 22.0 : 12.0;
     const goalX = isTeamA ? 80 : 1320;
     const baseX = isTeamA ? 160 : 1240;
 
@@ -430,17 +435,12 @@ function updateAiGoalkeepers(rs) {
         const distToGoal = Math.abs(goalX - b.x);
         predY = b.y + (b.vy / Math.abs(b.vx)) * distToGoal;
       }
-      ty = Math.max(GOAL_BOUNDS.yMin + 15, Math.min(GOAL_BOUNDS.yMax - 15, predY));
+      ty = Math.max(GOAL_BOUNDS.yMin + 10, Math.min(GOAL_BOUNDS.yMax - 10, predY));
 
-      const inDangerZone = isTeamA ? (b.x < 500) : (b.x > 900);
+      const inDangerZone = isTeamA ? (b.x < 550) : (b.x > 850);
       if (inDangerZone) {
-        tx = isTeamA ? Math.max(120, Math.min(320, b.x)) : Math.min(1280, Math.max(1080, b.x));
-        const distToBall = Math.hypot(b.x - p.x, b.y - p.y);
-        if (distToBall < 140) {
-          tx = b.x;
-          ty = b.y;
-          speedLimit = 24.0; // Wall Explosion speed!
-        }
+        tx = b.x; ty = b.y;
+        speedLimit = 26.0; // Explosion Wall Speed!
       } else {
         tx = baseX;
       }
@@ -468,20 +468,71 @@ function updateAiGoalkeepers(rs) {
 function updateOutfieldAI(rs) {
   const b = rs.ball;
   rs.players.forEach(p => {
-    if (!p.isAI || p.slot==='teamA_gk' || p.slot==='teamB_gk') return;
+    if (!p.isAI || p.slot === 'teamA_gk' || p.slot === 'teamB_gk') return;
     const isA = p.slot.startsWith('teamA');
-    const speed = 5.5;
-    let tx, ty;
-    if (p.slot.includes('striker'))       { tx=b.x; ty=b.y; }
-    else if (p.slot.includes('forward'))  { tx=isA?Math.max(b.x,700):Math.min(b.x,700); ty=b.y; }
-    else if (p.slot.includes('midfielder')){ const d=Math.hypot(b.x-p.x,b.y-p.y); tx=d<350?b.x:PITCH_WIDTH/2; ty=d<350?b.y:PITCH_HEIGHT/2; }
-    else if (p.slot.includes('defender')) { const defX=isA?320:PITCH_WIDTH-320; const inZ=isA?b.x<480:b.x>PITCH_WIDTH-480; tx=inZ?b.x:defX; ty=inZ?b.y:PITCH_HEIGHT/2; }
-    else return;
-    tx=Math.max(BOUNDS.xMin+5,Math.min(BOUNDS.xMax-5,tx));
-    ty=Math.max(BOUNDS.yMin+5,Math.min(BOUNDS.yMax-5,ty));
-    const dx=tx-p.x, dy=ty-p.y, dist=Math.hypot(dx,dy);
-    if (dist>2){ const ms=Math.min(speed,dist); p.vx=(dx/dist)*ms; p.vy=(dy/dist)*ms; p.x+=p.vx; p.y+=p.vy; }
-    else { p.vx=0; p.vy=0; }
+    const speed = 6.5;
+
+    const distToBall = Math.hypot(b.x - p.x, b.y - p.y);
+    const hasBall = distToBall < p.radius + b.radius + 18;
+
+    if (hasBall) {
+      // AI Has Ball! Realistic Team Passing & Shooting Logic
+      const teammates = rs.players.filter(other => 
+        other.id !== p.id && 
+        other.slot.startsWith(isA ? 'teamA' : 'teamB') && 
+        other.slot !== (isA ? 'teamA_gk' : 'teamB_gk')
+      );
+
+      const openTeammate = teammates.find(tm => isA ? (tm.x > p.x - 50) : (tm.x < p.x + 50));
+
+      if (openTeammate && Math.random() < 0.85) {
+        // PASS TO TEAMMATE!
+        const passDx = openTeammate.x - b.x;
+        const passDy = openTeammate.y - b.y;
+        const passDist = Math.hypot(passDx, passDy) || 1;
+        const passSpeed = 14.0;
+        b.vx = (passDx / passDist) * passSpeed;
+        b.vy = (passDy / passDist) * passSpeed;
+        sound.playKick();
+      } else {
+        // SHOOT AT OPPONENT GOAL!
+        const targetX = isA ? 1320 : 80;
+        const targetY = 425 + (Math.random() * 120 - 60);
+        const shootDx = targetX - b.x;
+        const shootDy = targetY - b.y;
+        const shootDist = Math.hypot(shootDx, shootDy) || 1;
+        const shootSpeed = 16.0;
+        b.vx = (shootDx / shootDist) * shootSpeed;
+        b.vy = (shootDy / shootDist) * shootSpeed;
+        sound.playKick();
+      }
+    } else {
+      // Chase & Positional Play
+      let tx, ty;
+      if (p.slot.includes('striker')) {
+        tx = b.x; ty = b.y;
+      } else if (p.slot.includes('forward')) {
+        tx = isA ? Math.max(b.x, 700) : Math.min(b.x, 700); ty = b.y;
+      } else if (p.slot.includes('midfielder')) {
+        const d = Math.hypot(b.x - p.x, b.y - p.y);
+        tx = d < 400 ? b.x : PITCH_WIDTH / 2; ty = d < 400 ? b.y : PITCH_HEIGHT / 2;
+      } else if (p.slot.includes('defender')) {
+        const defX = isA ? 320 : PITCH_WIDTH - 320;
+        const inZ = isA ? b.x < 500 : b.x > PITCH_WIDTH - 500;
+        tx = inZ ? b.x : defX; ty = inZ ? b.y : PITCH_HEIGHT / 2;
+      } else { return; }
+
+      tx = Math.max(BOUNDS.xMin + 10, Math.min(BOUNDS.xMax - 10, tx));
+      ty = Math.max(BOUNDS.yMin + 10, Math.min(BOUNDS.yMax - 10, ty));
+      const dx = tx - p.x, dy = ty - p.y, dist = Math.hypot(dx, dy);
+      if (dist > 2) {
+        const ms = Math.min(speed, dist);
+        p.vx = (dx / dist) * ms; p.vy = (dy / dist) * ms;
+        p.x += p.vx; p.y += p.vy;
+      } else {
+        p.vx = 0; p.vy = 0;
+      }
+    }
   });
 }
 
@@ -533,11 +584,28 @@ function hostPhysicsTick(rs) {
     if (b.x - b.radius < BOUNDS.xMin) { b.x=BOUNDS.xMin+b.radius; b.vx=-b.vx*0.75; }
     else if (b.x + b.radius > BOUNDS.xMax) { b.x=BOUNDS.xMax-b.radius; b.vx=-b.vx*0.75; }
   }
-  // Player collisions
+  // Player collisions & Super GK Force Shield Deflector
+  const hostPlayer = rs.players.find(p => p.isHost);
+  let superTeam = 'A';
+  if (hostPlayer && hostPlayer.slot.startsWith('teamA')) superTeam = 'A';
+  else if (hostPlayer && hostPlayer.slot.startsWith('teamB')) superTeam = 'B';
+
   rs.players.forEach(p => {
     if (p.slot==='unassigned') return;
     const dx=b.x-p.x, dy=b.y-p.y, dist=Math.hypot(dx,dy);
     const minDist=b.radius+p.radius;
+
+    // Super GK Force Shield Deflector (Absolute 0 Goal guarantee)
+    if (p.isAI && (p.slot === 'teamA_gk' || p.slot === 'teamB_gk')) {
+      const isTeamA = p.slot === 'teamA_gk';
+      const isSuper = (isTeamA && superTeam === 'A') || (!isTeamA && superTeam === 'B');
+      if (isSuper && dist < minDist + 35) {
+        b.vx = isTeamA ? Math.abs(b.vx || 10) + 14 : -Math.abs(b.vx || 10) - 14;
+        b.vy = (b.y < PITCH_HEIGHT/2) ? 7 : -7;
+        sound.playKick();
+      }
+    }
+
     if (dist < minDist && dist > 0) {
       if (!p.stats) p.stats={touches:0,goals:0};
       p.stats.touches++; lastTouchedBy=p.id;
@@ -1179,6 +1247,7 @@ function changeBallSpeed(val) {
   processHostMessage(msg,myId);
 }
 function joinSlot(slot) {
+  mySlot = slot; // update global tracking
   const msg={type:'select-slot',slot};
   if (isHost) {
     processHostMessage(msg,myId);
