@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Outer circle: dark green border -->
+  <circle cx="32" cy="32" r="31" fill="#059669" stroke="#065f46" stroke-width="2"/>
+
+  <!-- Ball base: white -->
+  <circle cx="32" cy="32" r="26" fill="#f0fdf4"/>
+
+  <!-- Green grass reflection glow -->
+  <radialGradient id="shine" cx="40%" cy="35%" r="55%">
+    <stop offset="0%" stop-color="#ffffff" stop-opacity="0.55"/>
+    <stop offset="100%" stop-color="#f0fdf4" stop-opacity="0"/>
+  </radialGradient>
+  <circle cx="32" cy="32" r="26" fill="url(#shine)"/>
+
+  <!-- Classic soccer pentagon patches in emerald green -->
+  <!-- Centre pentagon -->
+  <polygon points="32,20 39,25 37,33 27,33 25,25" fill="#059669" opacity="0.9"/>
+
+  <!-- Top -->
+  <polygon points="32,6 36,12 32,16 28,12" fill="#059669" opacity="0.85"/>
+
+  <!-- Bottom -->
+  <polygon points="32,58 36,52 32,48 28,52" fill="#059669" opacity="0.85"/>
+
+  <!-- Top-left -->
+  <polygon points="10,20 16,18 18,25 13,30" fill="#059669" opacity="0.85"/>
+
+  <!-- Top-right -->
+  <polygon points="54,20 48,18 46,25 51,30" fill="#059669" opacity="0.85"/>
+
+  <!-- Bottom-left -->
+  <polygon points="10,44 16,46 18,39 13,34" fill="#059669" opacity="0.85"/>
+
+  <!-- Bottom-right -->
+  <polygon points="54,44 48,46 46,39 51,34" fill="#059669" opacity="0.85"/>
+
+  <!-- Outline ring -->
+  <circle cx="32" cy="32" r="26" fill="none" stroke="#065f46" stroke-width="1.5"/>
+</svg>

@@ -2,11 +2,15 @@
   "version": 2,
   "builds": [
     {
-      "src": "**/*.{html,js,css}",
+      "src": "**/*.{html,js,css,svg}",
       "use": "@vercel/static"
     }
   ],
   "routes": [
+    {
+      "src": "/favicon.svg",
+      "dest": "/favicon.svg"
+    },
     {
       "src": "/game.js",
       "dest": "/game.js"
