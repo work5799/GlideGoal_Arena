@@ -404,24 +404,64 @@ function getStartPos(slot) {
 // ─── Host-side Physics ────────────────────────────────────────────────────────
 function updateAiGoalkeepers(rs) {
   const b = rs.ball;
+  const hostPlayer = rs.players.find(p => p.isHost);
+  let superTeam = 'A'; // default to Team A if host is unassigned or spectating
+  if (hostPlayer && hostPlayer.slot.startsWith('teamA')) {
+    superTeam = 'A';
+  } else if (hostPlayer && hostPlayer.slot.startsWith('teamB')) {
+    superTeam = 'B';
+  }
+
   rs.players.forEach(p => {
     if (!p.isAI) return;
-    let tx, ty, speedLimit = 8.5;
-    if (p.slot === 'teamA_gk') {
-      const close = b.x < 350 && b.y >= 200 && b.y <= 650;
-      tx = close ? Math.max(120,Math.min(240,b.x)) : 150;
-      ty = Math.max(290,Math.min(560, 425 + (b.y-425)*0.45));
-    } else if (p.slot === 'teamB_gk') {
-      const close = b.x > 1050 && b.y >= 200 && b.y <= 650;
-      tx = close ? Math.max(1160,Math.min(1280,b.x)) : 1250;
-      ty = Math.max(290,Math.min(560, 425 + (b.y-425)*0.45));
-    } else { return; }
-    const dx=tx-p.x, dy=ty-p.y, dist=Math.sqrt(dx*dx+dy*dy);
+    const isTeamA = p.slot === 'teamA_gk';
+    const isTeamB = p.slot === 'teamB_gk';
+    if (!isTeamA && !isTeamB) return;
+
+    const isSuperGK = (isTeamA && superTeam === 'A') || (isTeamB && superTeam === 'B');
+    let tx, ty, speedLimit = isSuperGK ? 18.0 : 11.0;
+    const goalX = isTeamA ? 80 : 1320;
+    const baseX = isTeamA ? 160 : 1240;
+
+    if (isSuperGK) {
+      // Super Wall AI GK: Trajectory Prediction & Aggressive Interception
+      let predY = b.y;
+      if (Math.abs(b.vx) > 0.1) {
+        const distToGoal = Math.abs(goalX - b.x);
+        predY = b.y + (b.vy / Math.abs(b.vx)) * distToGoal;
+      }
+      ty = Math.max(GOAL_BOUNDS.yMin + 15, Math.min(GOAL_BOUNDS.yMax - 15, predY));
+
+      const inDangerZone = isTeamA ? (b.x < 500) : (b.x > 900);
+      if (inDangerZone) {
+        tx = isTeamA ? Math.max(120, Math.min(320, b.x)) : Math.min(1280, Math.max(1080, b.x));
+        const distToBall = Math.hypot(b.x - p.x, b.y - p.y);
+        if (distToBall < 140) {
+          tx = b.x;
+          ty = b.y;
+          speedLimit = 24.0; // Wall Explosion speed!
+        }
+      } else {
+        tx = baseX;
+      }
+    } else {
+      // Standard Capable AI GK
+      const inDangerZone = isTeamA ? (b.x < 400 && b.y >= 200 && b.y <= 650) : (b.x > 1000 && b.y >= 200 && b.y <= 650);
+      tx = inDangerZone ? (isTeamA ? Math.max(130, Math.min(260, b.x)) : Math.min(1270, Math.max(1140, b.x))) : baseX;
+      ty = Math.max(GOAL_BOUNDS.yMin + 20, Math.min(GOAL_BOUNDS.yMax - 20, b.y));
+    }
+
+    const dx = tx - p.x, dy = ty - p.y;
+    const dist = Math.hypot(dx, dy);
     if (dist > 0) {
-      const s = dist > speedLimit ? speedLimit : dist;
-      p.vx = (dx/dist)*s; p.vy = (dy/dist)*s;
-    } else { p.vx=0; p.vy=0; }
-    p.x += p.vx; p.y += p.vy;
+      const s = Math.min(speedLimit, dist);
+      p.vx = (dx / dist) * s;
+      p.vy = (dy / dist) * s;
+    } else {
+      p.vx = 0; p.vy = 0;
+    }
+    p.x += p.vx;
+    p.y += p.vy;
   });
 }
 
