@@ -159,14 +159,27 @@ function cleanRoomState(state) {
 }
 
 let syncIntervalId = null;
+let heartbeatIntervalId = null;
 let lastFbTickTime = 0;
+
+function startHeartbeat() {
+  if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
+  heartbeatIntervalId = setInterval(() => {
+    if (roomCode && myId) {
+      fbWrite(`live_games/${roomCode}/heartbeats/${myId}`, Date.now());
+    }
+  }, 2500);
+}
 
 function startHostSync(code) {
   if (syncIntervalId) clearInterval(syncIntervalId);
+  startHeartbeat();
   fbDelete(`live_games/${code}/actions`);
   
   syncIntervalId = setInterval(async () => {
-    if (!roomCode) return;
+    if (!roomCode || !isHost) return;
+    
+    // 1. Process guest actions posted to Firebase
     const actionsObj = await fbRead(`live_games/${code}/actions`);
     if (actionsObj) {
       fbDelete(`live_games/${code}/actions`);
@@ -176,20 +189,57 @@ function startHostSync(code) {
         }
       });
     }
+
+    // 2. Prune disconnected / closed-tab players using heartbeats
+    if (roomState) {
+      const hbs = await fbRead(`live_games/${code}/heartbeats`);
+      if (hbs) {
+        const now = Date.now();
+        let changed = false;
+        const initialCount = roomState.players.length;
+        roomState.players = roomState.players.filter(p => {
+          if (p.isHost || p.isAI) return true;
+          const lastHb = hbs[p.id];
+          if (!lastHb || (now - lastHb > 8000)) {
+            changed = true;
+            return false;
+          }
+          return true;
+        });
+        if (changed || roomState.players.length !== initialCount) {
+          broadcastRoomState();
+        }
+      }
+    }
   }, 300);
 }
 
 function startGuestSync(code) {
   if (syncIntervalId) clearInterval(syncIntervalId);
+  startHeartbeat();
   
   syncIntervalId = setInterval(async () => {
-    if (!roomCode) return;
-    const intervalTime = (gameActive ? 80 : 350);
-    const msg = await fbRead(`live_games/${code}/state`);
-    if (msg) {
-      handleMessage(msg);
+    if (!roomCode || isHost) return;
+    
+    // Read room state & timer
+    const stateWrapper = await fbRead(`live_games/${code}/state`);
+    if (stateWrapper) {
+      if (stateWrapper.roomState) {
+        handleMessage({ type: 'room-state-updated', roomState: stateWrapper.roomState });
+      }
+      if (stateWrapper.event && stateWrapper.event !== 'room-state-updated') {
+        handleMessage(stateWrapper.eventData || { type: stateWrapper.event });
+      }
     }
-  }, 350);
+
+    // Read high-speed physics ticks during live match
+    if (gameActive) {
+      const tickMsg = await fbRead(`live_games/${code}/tick`);
+      if (tickMsg && tickMsg.type === 'physics-tick') {
+        handleMessage(tickMsg);
+      }
+    }
+  }, 250);
 }
 
 function broadcastToAll(msg) {
@@ -197,15 +247,21 @@ function broadcastToAll(msg) {
   guestConns.forEach(c => { try { c.send(msg); } catch(e){} });
 
   // 2. Firebase Cloud Sync (guarantees cross-ISP connectivity)
-  if (roomCode) {
+  if (roomCode && isHost) {
     if (msg.type === 'physics-tick') {
       const now = Date.now();
-      if (now - lastFbTickTime > 80) {
+      if (now - lastFbTickTime > 70) {
         lastFbTickTime = now;
-        fbWrite(`live_games/${roomCode}/state`, msg);
+        fbWrite(`live_games/${roomCode}/tick`, msg);
       }
     } else {
-      fbWrite(`live_games/${roomCode}/state`, msg);
+      // Full state sync for timer, lobby, goals, match start, etc.
+      fbWrite(`live_games/${roomCode}/state`, {
+        type: 'room-state-updated',
+        roomState: cleanRoomState(roomState),
+        event: msg.type,
+        eventData: msg
+      });
     }
   }
 }
