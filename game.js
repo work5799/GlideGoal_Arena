@@ -799,7 +799,6 @@ function initPeer(id) {
         if (!resolved) {
           resolved = true;
           clearTimeout(timer);
-          myId = openId;
           resolve(p);
         }
       });
@@ -821,14 +820,15 @@ function initPeer(id) {
 }
 
 function attachGuestConn(conn) {
+  const guestId = conn.metadata?.guestId || conn.peer;
   conn.on('open', () => {
     if (!guestConns.includes(conn)) guestConns.push(conn);
     const rs = roomState;
     if (!rs) return;
-    let p = rs.players.find(pl => pl.id === conn.peer);
+    let p = rs.players.find(pl => pl.id === guestId);
     if (!p) {
       rs.players.push({
-        id: conn.peer, name: conn.metadata?.name || 'Guest',
+        id: guestId, name: conn.metadata?.name || 'Guest',
         slot:'unassigned', x:0, y:0, vx:0, vy:0,
         radius:30, isHost:false, flag:'BAN',
         stats:{touches:0,goals:0}, joinedAt: Date.now()
@@ -837,11 +837,10 @@ function attachGuestConn(conn) {
     }
   });
   conn.on('data', (msg) => {
-    processHostMessage(msg, conn.peer);
+    processHostMessage(msg, guestId);
   });
   conn.on('close', () => {
     guestConns = guestConns.filter(c => c !== conn);
-    // Note: Heartbeat system handles true disconnects seamlessly.
   });
 }
 
@@ -971,9 +970,8 @@ async function joinRoom() {
   }
 
   document.getElementById('lobbyError').innerText = '🔄 Joining room...';
-  const tempGuestId = `gg-guest-${Date.now()}`;
-  peer = await initPeer(tempGuestId);
-  myId = (peer && peer.id) ? peer.id : tempGuestId;
+  myId = `gg-guest-${Date.now()}-${Math.floor(Math.random()*10000)}`;
+  peer = await initPeer(myId);
   isHost = false;
 
   // Immediately fetch initial state so Team A / Team B slots render INSTANTLY
@@ -999,7 +997,7 @@ async function joinRoom() {
   // Parallel WebRTC connection attempt
   if (peer && hostPeerId) {
     const conn = peer.connect(hostPeerId, {
-      metadata: { name: playerName },
+      metadata: { name: playerName, guestId: myId },
       reliable: true,
       serialization: 'json',
       config: ICE_SERVERS
