@@ -180,6 +180,7 @@ function startHostSync(code) {
   startHeartbeat();
   fbDelete(`live_games/${code}/actions`);
   fbDelete(`live_games/${code}/join_requests`);
+  fbDelete(`live_games/${code}/slot_requests`);
   
   syncIntervalId = setInterval(async () => {
     if (!roomCode || !isHost) return;
@@ -207,6 +208,26 @@ function startHostSync(code) {
         }
       }
       if (reqChanged) broadcastRoomState();
+    }
+
+    // 1b. Process direct slot requests in Firebase
+    const slotReqs = await fbRead(`live_games/${code}/slot_requests`);
+    if (slotReqs && roomState) {
+      let slotChanged = false;
+      for (const [gId, req] of Object.entries(slotReqs)) {
+        fbDelete(`live_games/${code}/slot_requests/${gId}`);
+        let p = roomState.players.find(pl => pl.id === gId);
+        if (p && req && req.slot) {
+          if (isValidSlot(req.slot, roomState.maxPlayers, roomState.aiGoalkeepers)) {
+            p.slot = req.slot;
+            p.flag = req.slot.startsWith('teamA')?'ARG':req.slot.startsWith('teamB')?'BRA':'BAN';
+            const pos = getStartPos(req.slot); p.x = pos.x; p.y = pos.y;
+            if (req.name && p.name === 'Guest') p.name = req.name;
+            slotChanged = true;
+          }
+        }
+      }
+      if (slotChanged) broadcastRoomState();
     }
     
     // 2. Process guest actions posted to Firebase
@@ -1030,18 +1051,34 @@ async function joinRoom() {
   peer = await initPeer(myId);
   isHost = false;
 
-  // Immediately fetch initial state so Team A / Team B slots render INSTANTLY
+  // Immediately fetch initial state or build fallback so UI renders 100% INSTANTLY
+  let activeState = null;
   const initialState = await fbRead(`live_games/${code}/state`);
   if (initialState && initialState.roomState) {
-    if (!initialState.roomState.players.some(p => p.id === myId)) {
-      initialState.roomState.players.push({
-        id: myId, name: playerName, slot: 'unassigned',
-        x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: false, flag: 'BAN',
-        stats: { touches: 0, goals: 0 }, joinedAt: Date.now()
-      });
-    }
-    handleMessage(initialState);
+    activeState = initialState.roomState;
+  } else {
+    activeState = {
+      id: code,
+      players: [{
+        id: hostPeerId || 'host', name: 'Host', slot: 'unassigned',
+        x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: true, flag: 'BAN',
+        stats: { touches: 0, goals: 0 }, joinedAt: Date.now() - 5000
+      }],
+      matchTime: 60, maxPlayers: 2, aiGoalkeepers: false,
+      ballSpeedLimit: 20, timeRemaining: 60,
+      scores: { A: 0, B: 0 }, gameState: 'lobby',
+      ball: { x: 650, y: 400, vx: 0, vy: 0, radius: 18 }
+    };
   }
+
+  if (!activeState.players.some(p => p.id === myId)) {
+    activeState.players.push({
+      id: myId, name: playerName, slot: 'unassigned',
+      x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: false, flag: 'BAN',
+      stats: { touches: 0, goals: 0 }, joinedAt: Date.now()
+    });
+  }
+  handleMessage({ type: 'room-state-updated', roomState: activeState });
 
   // Send join request via Firebase cloud relay & direct join node FIRST
   fbWrite(`live_games/${code}/join_requests/${myId}`, { name: playerName, joinedAt: Date.now() });
@@ -1103,7 +1140,24 @@ function changeBallSpeed(val) {
 }
 function joinSlot(slot) {
   const msg={type:'select-slot',slot};
-  if (isHost) processHostMessage(msg,myId); else sendToHost(msg);
+  if (isHost) {
+    processHostMessage(msg,myId);
+  } else {
+    // 1. Instant local slot update for ultra-smooth UI responsiveness
+    if (roomState) {
+      let p = roomState.players.find(pl => pl.id === myId);
+      if (p) {
+        p.slot = slot;
+        p.flag = slot.startsWith('teamA')?'ARG':slot.startsWith('teamB')?'BRA':'BAN';
+      }
+      updateWaitingRoomUI(roomState);
+    }
+    // 2. Transmit via WebRTC and Firebase Cloud channels
+    sendToHost(msg);
+    if (roomCode) {
+      fbWrite(`live_games/${roomCode}/slot_requests/${myId}`, { slot, name: playerName });
+    }
+  }
 }
 function sendStartMatch() {
   if (!isHost) return;
