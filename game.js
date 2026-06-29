@@ -267,6 +267,9 @@ function broadcastToAll(msg) {
 }
 
 function sendToHost(msg) {
+  if (!msg.name && typeof playerName !== 'undefined' && playerName) {
+    msg.name = playerName;
+  }
   // 1. WebRTC DataChannel send
   if (hostConn && hostConn.open) try { hostConn.send(msg); } catch(e){}
   // 2. Firebase Cloud relay
@@ -543,7 +546,6 @@ function processHostMessage(msg, fromId) {
       const slot=msg.slot;
       if (!isValidSlot(slot, rs.maxPlayers, rs.aiGoalkeepers)) {
         const errMsg={type:'slot-error',message:'This slot is disabled or controlled by AI!'};
-        // send back to sender
         if (fromId===myId) handleMessage(errMsg);
         else { const c=guestConns.find(c=>c.peer===fromId); if(c)c.send(errMsg); }
         return;
@@ -554,18 +556,28 @@ function processHostMessage(msg, fromId) {
         else { const c=guestConns.find(c=>c.peer===fromId); if(c)c.send(errMsg); }
         return;
       }
-      const player=rs.players.find(p=>p.id===fromId);
-      if (player) {
-        player.slot=slot;
-        player.flag=slot.startsWith('teamA')?'ARG':slot.startsWith('teamB')?'BRA':'BAN';
-        const pos=getStartPos(slot); player.x=pos.x; player.y=pos.y;
+      let player=rs.players.find(p=>p.id===fromId);
+      if (!player) {
+        player = {
+          id: fromId, name: msg.name || 'Guest', slot: 'unassigned',
+          x:0, y:0, vx:0, vy:0, radius:30, isHost:false, flag:'BAN',
+          stats:{touches:0,goals:0}
+        };
+        rs.players.push(player);
       }
+      player.slot=slot;
+      player.flag=slot.startsWith('teamA')?'ARG':slot.startsWith('teamB')?'BRA':'BAN';
+      const pos=getStartPos(slot); player.x=pos.x; player.y=pos.y;
       broadcastRoomState();
       break;
     }
     case 'select-flag': {
-      const player=rs.players.find(p=>p.id===fromId);
-      if (player) { player.flag=msg.flag; broadcastRoomState(); }
+      let player=rs.players.find(p=>p.id===fromId);
+      if (!player) {
+        player = { id: fromId, name: msg.name || 'Guest', slot:'unassigned', x:0, y:0, vx:0, vy:0, radius:30, isHost:false, flag:msg.flag, stats:{touches:0,goals:0} };
+        rs.players.push(player);
+      } else { player.flag=msg.flag; }
+      broadcastRoomState();
       break;
     }
     case 'update-match-time': {
@@ -761,12 +773,38 @@ const ICE_SERVERS = {
 
 function initPeer(id) {
   return new Promise((resolve) => {
-    const p = new Peer(id, { config: ICE_SERVERS, debug: 0 });
-    p.on('open', (openId) => { myId = openId; resolve(p); });
-    p.on('error', (err) => {
-      if (err.type === 'unavailable-id') resolve(null);
-      else { console.warn('Peer error:', err.type); resolve(null); }
-    });
+    let resolved = false;
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        resolve(null);
+      }
+    }, 2000);
+
+    try {
+      const p = new Peer(id, { config: ICE_SERVERS, debug: 0 });
+      p.on('open', (openId) => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timer);
+          myId = openId;
+          resolve(p);
+        }
+      });
+      p.on('error', (err) => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timer);
+          resolve(null);
+        }
+      });
+    } catch(e) {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        resolve(null);
+      }
+    }
   });
 }
 
