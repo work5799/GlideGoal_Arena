@@ -594,9 +594,21 @@ function processHostMessage(msg, fromId) {
       break;
     }
     case 'guest-join': {
-      // new guest connected, send them current room state
-      const c=guestConns.find(c=>c.peer===fromId);
-      if (c) c.send({type:'room-state-updated', roomState:cleanRoomState(rs)});
+      let player = rs.players.find(p => p.id === fromId);
+      if (!player) {
+        player = {
+          id: fromId,
+          name: msg.name || 'Guest',
+          slot: 'unassigned',
+          x: 0, y: 0, vx: 0, vy: 0,
+          radius: 30, isHost: false, flag: 'BAN',
+          stats: { touches: 0, goals: 0 }
+        };
+        rs.players.push(player);
+      } else if (msg.name && player.name !== msg.name) {
+        player.name = msg.name;
+      }
+      broadcastRoomState();
       break;
     }
   }
@@ -877,7 +889,7 @@ async function joinRoom() {
   document.getElementById('waitingRoom').classList.remove('hidden');
 
   // Send join request via Firebase cloud relay
-  sendToHost({ type:'guest-join' });
+  sendToHost({ type:'guest-join', name: playerName });
 
   // Parallel WebRTC connection attempt
   if (peer && hostPeerId) {
@@ -889,7 +901,7 @@ async function joinRoom() {
     });
     hostConn = conn;
     conn.on('open', () => {
-      conn.send({ type:'guest-join' });
+      conn.send({ type:'guest-join', name: playerName });
     });
     conn.on('data', (msg) => { handleMessage(msg); });
   }
