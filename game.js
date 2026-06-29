@@ -306,18 +306,13 @@ function startGuestSync(code) {
     const stateWrapper = await fbRead(`live_games/${code}/state`);
     if (stateWrapper && stateWrapper.roomState) {
       const rs = stateWrapper.roomState;
-      // Ensure self stays present locally with selected slot if Host hasn't synced us yet
-      if (myId) {
-        let me = rs.players.find(p => p.id === myId);
-        if (!me) {
-          rs.players.push({
-            id: myId, name: playerName, slot: mySlot || 'unassigned',
-            x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: false, flag: 'BAN',
-            stats: { touches: 0, goals: 0 }, joinedAt: Date.now()
-          });
-        } else if (mySlot && mySlot !== 'unassigned' && me.slot === 'unassigned') {
-          me.slot = mySlot;
-        }
+      // Ensure self stays present locally in unassigned if Host hasn't synced us yet
+      if (myId && !rs.players.some(p => p.id === myId)) {
+        rs.players.push({
+          id: myId, name: playerName, slot: 'unassigned',
+          x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: false, flag: 'BAN',
+          stats: { touches: 0, goals: 0 }, joinedAt: Date.now()
+        });
       }
       handleMessage({ type: 'room-state-updated', roomState: rs });
       if (stateWrapper.event && stateWrapper.event !== 'room-state-updated') {
@@ -409,59 +404,24 @@ function getStartPos(slot) {
 // ─── Host-side Physics ────────────────────────────────────────────────────────
 function updateAiGoalkeepers(rs) {
   const b = rs.ball;
-  const hostPlayer = rs.players.find(p => p.isHost);
-  let superTeam = 'A'; // default to Team A if host is unassigned or spectating
-  if (hostPlayer && hostPlayer.slot.startsWith('teamA')) {
-    superTeam = 'A';
-  } else if (hostPlayer && hostPlayer.slot.startsWith('teamB')) {
-    superTeam = 'B';
-  }
-
   rs.players.forEach(p => {
     if (!p.isAI) return;
-    const isTeamA = p.slot === 'teamA_gk';
-    const isTeamB = p.slot === 'teamB_gk';
-    if (!isTeamA && !isTeamB) return;
-
-    const isSuperGK = (isTeamA && superTeam === 'A') || (isTeamB && superTeam === 'B');
-    let tx, ty, speedLimit = isSuperGK ? 22.0 : 12.0;
-    const goalX = isTeamA ? 80 : 1320;
-    const baseX = isTeamA ? 160 : 1240;
-
-    if (isSuperGK) {
-      // Super Wall AI GK: Trajectory Prediction & Aggressive Interception
-      let predY = b.y;
-      if (Math.abs(b.vx) > 0.1) {
-        const distToGoal = Math.abs(goalX - b.x);
-        predY = b.y + (b.vy / Math.abs(b.vx)) * distToGoal;
-      }
-      ty = Math.max(GOAL_BOUNDS.yMin + 10, Math.min(GOAL_BOUNDS.yMax - 10, predY));
-
-      const inDangerZone = isTeamA ? (b.x < 550) : (b.x > 850);
-      if (inDangerZone) {
-        tx = b.x; ty = b.y;
-        speedLimit = 26.0; // Explosion Wall Speed!
-      } else {
-        tx = baseX;
-      }
-    } else {
-      // Standard Capable AI GK
-      const inDangerZone = isTeamA ? (b.x < 400 && b.y >= 200 && b.y <= 650) : (b.x > 1000 && b.y >= 200 && b.y <= 650);
-      tx = inDangerZone ? (isTeamA ? Math.max(130, Math.min(260, b.x)) : Math.min(1270, Math.max(1140, b.x))) : baseX;
-      ty = Math.max(GOAL_BOUNDS.yMin + 20, Math.min(GOAL_BOUNDS.yMax - 20, b.y));
-    }
-
-    const dx = tx - p.x, dy = ty - p.y;
-    const dist = Math.hypot(dx, dy);
+    let tx, ty, speedLimit = 8.5;
+    if (p.slot === 'teamA_gk') {
+      const close = b.x < 350 && b.y >= 200 && b.y <= 650;
+      tx = close ? Math.max(120,Math.min(240,b.x)) : 150;
+      ty = Math.max(290,Math.min(560, 425 + (b.y-425)*0.45));
+    } else if (p.slot === 'teamB_gk') {
+      const close = b.x > 1050 && b.y >= 200 && b.y <= 650;
+      tx = close ? Math.max(1160,Math.min(1280,b.x)) : 1250;
+      ty = Math.max(290,Math.min(560, 425 + (b.y-425)*0.45));
+    } else { return; }
+    const dx=tx-p.x, dy=ty-p.y, dist=Math.sqrt(dx*dx+dy*dy);
     if (dist > 0) {
-      const s = Math.min(speedLimit, dist);
-      p.vx = (dx / dist) * s;
-      p.vy = (dy / dist) * s;
-    } else {
-      p.vx = 0; p.vy = 0;
-    }
-    p.x += p.vx;
-    p.y += p.vy;
+      const s = dist > speedLimit ? speedLimit : dist;
+      p.vx = (dx/dist)*s; p.vy = (dy/dist)*s;
+    } else { p.vx=0; p.vy=0; }
+    p.x += p.vx; p.y += p.vy;
   });
 }
 
@@ -533,28 +493,11 @@ function hostPhysicsTick(rs) {
     if (b.x - b.radius < BOUNDS.xMin) { b.x=BOUNDS.xMin+b.radius; b.vx=-b.vx*0.75; }
     else if (b.x + b.radius > BOUNDS.xMax) { b.x=BOUNDS.xMax-b.radius; b.vx=-b.vx*0.75; }
   }
-  // Player collisions & Super GK Force Shield Deflector
-  const hostPlayer = rs.players.find(p => p.isHost);
-  let superTeam = 'A';
-  if (hostPlayer && hostPlayer.slot.startsWith('teamA')) superTeam = 'A';
-  else if (hostPlayer && hostPlayer.slot.startsWith('teamB')) superTeam = 'B';
-
+  // Player collisions
   rs.players.forEach(p => {
     if (p.slot==='unassigned') return;
     const dx=b.x-p.x, dy=b.y-p.y, dist=Math.hypot(dx,dy);
     const minDist=b.radius+p.radius;
-
-    // Super GK Force Shield Deflector (Absolute 0 Goal guarantee)
-    if (p.isAI && (p.slot === 'teamA_gk' || p.slot === 'teamB_gk')) {
-      const isTeamA = p.slot === 'teamA_gk';
-      const isSuper = (isTeamA && superTeam === 'A') || (!isTeamA && superTeam === 'B');
-      if (isSuper && dist < minDist + 35) {
-        b.vx = isTeamA ? Math.abs(b.vx || 10) + 14 : -Math.abs(b.vx || 10) - 14;
-        b.vy = (b.y < PITCH_HEIGHT/2) ? 7 : -7;
-        sound.playKick();
-      }
-    }
-
     if (dist < minDist && dist > 0) {
       if (!p.stats) p.stats={touches:0,goals:0};
       p.stats.touches++; lastTouchedBy=p.id;
@@ -562,9 +505,10 @@ function hostPhysicsTick(rs) {
       b.x+=nx*overlap; b.y+=ny*overlap;
       const rvx=b.vx-p.vx, rvy=b.vy-p.vy;
       const vaN=rvx*nx+rvy*ny;
-      if (vaN < 0) { const imp=-(1+0.6)*vaN; b.vx+=nx*imp; b.vy+=ny*imp; }
-      const ps=Math.hypot(p.vx,p.vy), pm=ps>2?0.35:0.15;
-      b.vx+=nx*(2.0+ps*pm); b.vy+=ny*(2.0+ps*pm);
+      if (vaN < 0) {
+        const imp=-(1 + 0.75)*vaN;
+        b.vx+=nx*imp; b.vy+=ny*imp;
+      }
       const bspd=Math.hypot(b.vx,b.vy), sl=rs.ballSpeedLimit||20;
       if (bspd>sl){ b.vx=(b.vx/bspd)*sl; b.vy=(b.vy/bspd)*sl; }
     }
@@ -1196,7 +1140,6 @@ function changeBallSpeed(val) {
   processHostMessage(msg,myId);
 }
 function joinSlot(slot) {
-  mySlot = slot; // update global tracking
   const msg={type:'select-slot',slot};
   if (isHost) {
     processHostMessage(msg,myId);
