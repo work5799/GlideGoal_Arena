@@ -184,12 +184,12 @@ function startHostSync(code) {
     // 1. Process guest actions posted to Firebase
     const actionsObj = await fbRead(`live_games/${code}/actions`);
     if (actionsObj) {
-      fbDelete(`live_games/${code}/actions`);
-      Object.values(actionsObj).forEach(item => {
+      for (const [key, item] of Object.entries(actionsObj)) {
+        fbDelete(`live_games/${code}/actions/${key}`);
         if (item && item.msg && item.fromId && item.fromId !== myId) {
           processHostMessage(item.msg, item.fromId);
         }
-      });
+      }
     }
 
     // 2. Prune disconnected / closed-tab players using heartbeats
@@ -822,34 +822,26 @@ function initPeer(id) {
 
 function attachGuestConn(conn) {
   conn.on('open', () => {
-    guestConns.push(conn);
+    if (!guestConns.includes(conn)) guestConns.push(conn);
     const rs = roomState;
     if (!rs) return;
-    rs.players.push({
-      id: conn.peer, name: conn.metadata?.name || 'Guest',
-      slot:'unassigned', x:0, y:0, vx:0, vy:0,
-      radius:30, isHost:false, flag:'BAN',
-      stats:{touches:0,goals:0}
-    });
-    broadcastRoomState();
+    let p = rs.players.find(pl => pl.id === conn.peer);
+    if (!p) {
+      rs.players.push({
+        id: conn.peer, name: conn.metadata?.name || 'Guest',
+        slot:'unassigned', x:0, y:0, vx:0, vy:0,
+        radius:30, isHost:false, flag:'BAN',
+        stats:{touches:0,goals:0}, joinedAt: Date.now()
+      });
+      broadcastRoomState();
+    }
   });
   conn.on('data', (msg) => {
     processHostMessage(msg, conn.peer);
   });
   conn.on('close', () => {
     guestConns = guestConns.filter(c => c !== conn);
-    const rs = roomState;
-    if (!rs) return;
-    const idx = rs.players.findIndex(p=>p.id===conn.peer);
-    if (idx!==-1) {
-      const p=rs.players[idx];
-      rs.players.splice(idx,1);
-      if (p.isHost && rs.players.length>0) {
-        const nextHuman=rs.players.find(pl=>!pl.isAI);
-        if (nextHuman) nextHuman.isHost=true;
-      }
-      broadcastRoomState();
-    }
+    // Note: Heartbeat system handles true disconnects seamlessly.
   });
 }
 
@@ -979,8 +971,9 @@ async function joinRoom() {
   }
 
   document.getElementById('lobbyError').innerText = '🔄 Joining room...';
-  peer = await initPeer(`gg-guest-${Date.now()}`);
-  myId = peer ? peer.id : `gg-guest-fb-${Date.now()}`;
+  const tempGuestId = `gg-guest-${Date.now()}`;
+  peer = await initPeer(tempGuestId);
+  myId = (peer && peer.id) ? peer.id : tempGuestId;
   isHost = false;
 
   // Immediately fetch initial state so Team A / Team B slots render INSTANTLY

@@ -904,3 +904,65 @@ h1 {
   padding: 4px 7px !important;
 }
 .ai-add-btn:hover { background: rgba(245,158,11,0.22) !important; transform: translateY(-1px); }
+
+/* ─── Mobile Responsiveness & Touch Support ───────────────────────────────── */
+@media (max-width: 850px) {
+  .game-container {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 0;
+  }
+
+  .panel.lobby-panel {
+    max-width: 96%;
+    padding: 16px 12px;
+    max-height: 94vh;
+    overflow-y: auto;
+  }
+
+  .lobby-slots-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .slot-card {
+    min-height: auto;
+    max-height: none;
+  }
+
+  .slot-card-content {
+    max-height: 220px;
+  }
+
+  .lobby-config-container {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .lobby-header {
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+    text-align: center;
+  }
+}
+
+@media (max-width: 480px) {
+  h1 {
+    font-size: 2rem;
+  }
+
+  .panel {
+    padding: 20px 14px;
+    width: 95%;
+  }
+
+  .lobby-slot-row {
+    padding: 8px 10px;
+  }
+
+  .slot-action-btn {
+    padding: 6px 12px !important;
+    font-size: 0.8rem !important;
+  }
+}
