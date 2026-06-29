@@ -563,7 +563,7 @@ function broadcastRoomState() {
 //  5. Copy the URL shown (e.g. https://glidegoal-xxxxx-default-rtdb.firebaseio.com)
 //  6. Paste it below and tell the developer to push the change.
 
-const FIREBASE_DB_URL = 'https://glidegoal-arena-default-rtdb.firebaseio.com';
+const FIREBASE_DB_URL = 'https://glide-goal-arena-default-rtdb.firebaseio.com';
 
 async function fbWrite(path, data) {
   try {
