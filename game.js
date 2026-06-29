@@ -158,56 +158,55 @@ function cleanRoomState(state) {
   };
 }
 
-let fbActionsSource = null;
-let fbStateSource = null;
+let syncIntervalId = null;
+let lastFbTickTime = 0;
 
-function startHostFirebaseListener(code) {
-  if (fbActionsSource) fbActionsSource.close();
+function startHostSync(code) {
+  if (syncIntervalId) clearInterval(syncIntervalId);
   fbDelete(`live_games/${code}/actions`);
-  try {
-    fbActionsSource = new EventSource(`${FIREBASE_DB_URL}/live_games/${code}/actions.json`);
-    fbActionsSource.onmessage = (e) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload && payload.data) {
-          // Firebase SSE can send an object of items or single item
-          const dataObj = payload.data;
-          if (dataObj.msg && dataObj.fromId && dataObj.fromId !== myId) {
-            processHostMessage(dataObj.msg, dataObj.fromId);
-          } else {
-            Object.values(dataObj).forEach(item => {
-              if (item && item.msg && item.fromId && item.fromId !== myId) {
-                processHostMessage(item.msg, item.fromId);
-              }
-            });
-          }
+  
+  syncIntervalId = setInterval(async () => {
+    if (!roomCode) return;
+    const actionsObj = await fbRead(`live_games/${code}/actions`);
+    if (actionsObj) {
+      fbDelete(`live_games/${code}/actions`);
+      Object.values(actionsObj).forEach(item => {
+        if (item && item.msg && item.fromId && item.fromId !== myId) {
+          processHostMessage(item.msg, item.fromId);
         }
-      } catch(err){}
-    };
-  } catch(err){}
+      });
+    }
+  }, 300);
 }
 
-function startGuestFirebaseListener(code) {
-  if (fbStateSource) fbStateSource.close();
-  try {
-    fbStateSource = new EventSource(`${FIREBASE_DB_URL}/live_games/${code}/state.json`);
-    fbStateSource.onmessage = (e) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload && payload.data) {
-          handleMessage(payload.data);
-        }
-      } catch(err){}
-    };
-  } catch(err){}
+function startGuestSync(code) {
+  if (syncIntervalId) clearInterval(syncIntervalId);
+  
+  syncIntervalId = setInterval(async () => {
+    if (!roomCode) return;
+    const intervalTime = (gameActive ? 80 : 350);
+    const msg = await fbRead(`live_games/${code}/state`);
+    if (msg) {
+      handleMessage(msg);
+    }
+  }, 350);
 }
 
 function broadcastToAll(msg) {
-  // 1. WebRTC DataChannel send
+  // 1. WebRTC DataChannel send (instant 60 FPS when connected)
   guestConns.forEach(c => { try { c.send(msg); } catch(e){} });
-  // 2. Firebase Cloud relay (guarantees cross-ISP connectivity)
+
+  // 2. Firebase Cloud Sync (guarantees cross-ISP connectivity)
   if (roomCode) {
-    fbWrite(`live_games/${roomCode}/state`, msg);
+    if (msg.type === 'physics-tick') {
+      const now = Date.now();
+      if (now - lastFbTickTime > 80) {
+        lastFbTickTime = now;
+        fbWrite(`live_games/${roomCode}/state`, msg);
+      }
+    } else {
+      fbWrite(`live_games/${roomCode}/state`, msg);
+    }
   }
 }
 
@@ -825,9 +824,11 @@ async function createRoom() {
   };
 
   peer.on('connection', (conn) => { attachGuestConn(conn); });
-  startHostFirebaseListener(roomCode);
+  startHostSync(roomCode);
+  broadcastRoomState();
 
   window.addEventListener('beforeunload', () => {
+    if (syncIntervalId) clearInterval(syncIntervalId);
     fbDelete(`room_index/${roomCode}`);
     fbDelete(`live_games/${roomCode}`);
     fbPatch(roomPath, { status: 'closed' });
@@ -871,13 +872,18 @@ async function joinRoom() {
     return;
   }
 
-  document.getElementById('lobbyError').innerText = '🔄 Connecting...';
+  document.getElementById('lobbyError').innerText = '🔄 Joining room...';
   peer = await initPeer(`gg-guest-${Date.now()}`);
   myId = peer ? peer.id : `gg-guest-fb-${Date.now()}`;
   isHost = false;
 
-  // Immediately start listening to Firebase state & join waiting room
-  startGuestFirebaseListener(code);
+  // Immediately fetch initial state so Team A / Team B slots render INSTANTLY
+  const initialState = await fbRead(`live_games/${code}/state`);
+  if (initialState && initialState.roomState) {
+    handleMessage(initialState);
+  }
+
+  startGuestSync(code);
   document.getElementById('lobbyError').innerText='';
   document.getElementById('displayRoomCode').innerText = code;
   document.getElementById('matchTimeSelect').disabled=true;
