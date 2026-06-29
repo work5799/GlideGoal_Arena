@@ -433,42 +433,48 @@ function updateAiGoalkeepers(rs) {
 
 function updateOutfieldAI(rs) {
   const b = rs.ball;
-  rs.players.forEach(p => {
-    if (!p.isAI || p.slot === 'teamA_gk' || p.slot === 'teamB_gk') return;
-    const isA = p.slot.startsWith('teamA');
-    const speed = 7.5;
-    let tx, ty;
+  const teamAPlayers = rs.players.filter(p => p.isAI && p.slot.startsWith('teamA') && p.slot !== 'teamA_gk');
+  const teamBPlayers = rs.players.filter(p => p.isAI && p.slot.startsWith('teamB') && p.slot !== 'teamB_gk');
 
-    if (p.slot.includes('striker') || p.slot.includes('forward')) {
-      const offsetX = isA ? -25 : 25;
-      tx = b.x + offsetX; ty = b.y;
-    } else if (p.slot.includes('midfielder')) {
+  function processTeamAI(teamList, isA) {
+    if (teamList.length === 0) return;
+    let chaser = teamList[0];
+    let minDist = Math.hypot(b.x - chaser.x, b.y - chaser.y);
+    teamList.forEach(p => {
       const d = Math.hypot(b.x - p.x, b.y - p.y);
-      if (d < 450) {
-        const offsetX = isA ? -20 : 20;
-        tx = b.x + offsetX; ty = b.y;
-      } else {
-        tx = isA ? 550 : 920; ty = 425;
-      }
-    } else if (p.slot.includes('defender')) {
-      const inZone = isA ? b.x < 700 : b.x > 770;
-      if (inZone) {
-        const offsetX = isA ? -20 : 20;
-        tx = b.x + offsetX; ty = b.y;
-      } else {
-        tx = isA ? 350 : 1120; ty = PITCH_HEIGHT / 2;
-      }
-    } else return;
+      if (d < minDist) { minDist = d; chaser = p; }
+    });
 
-    tx = Math.max(BOUNDS.xMin + 10, Math.min(BOUNDS.xMax - 10, tx));
-    ty = Math.max(BOUNDS.yMin + 10, Math.min(BOUNDS.yMax - 10, ty));
-    const dx = tx - p.x, dy = ty - p.y, dist = Math.hypot(dx, dy);
-    if (dist > 2) {
-      const ms = Math.min(speed, dist);
-      p.vx = (dx / dist) * ms; p.vy = (dy / dist) * ms;
-      p.x += p.vx; p.y += p.vy;
-    } else { p.vx = 0; p.vy = 0; }
-  });
+    teamList.forEach(p => {
+      const speed = p === chaser ? 8.5 : 6.0;
+      let tx, ty;
+      if (p === chaser) {
+        const offsetX = isA ? -30 : 30;
+        tx = b.x + offsetX; ty = b.y;
+      } else if (p.slot.includes('defender')) {
+        tx = isA ? 320 : 1150;
+        ty = Math.max(250, Math.min(600, b.y));
+      } else if (p.slot.includes('midfielder')) {
+        tx = isA ? 580 : 890;
+        ty = p.slot.includes('1') ? 280 : 570;
+      } else {
+        tx = isA ? 900 : 570;
+        ty = Math.max(200, Math.min(650, b.y));
+      }
+
+      tx = Math.max(BOUNDS.xMin + 15, Math.min(BOUNDS.xMax - 15, tx));
+      ty = Math.max(BOUNDS.yMin + 15, Math.min(BOUNDS.yMax - 15, ty));
+      const dx = tx - p.x, dy = ty - p.y, dist = Math.hypot(dx, dy);
+      if (dist > 2) {
+        const ms = Math.min(speed, dist);
+        p.vx = (dx / dist) * ms; p.vy = (dy / dist) * ms;
+        p.x += p.vx; p.y += p.vy;
+      } else { p.vx = 0; p.vy = 0; }
+    });
+  }
+
+  processTeamAI(teamAPlayers, true);
+  processTeamAI(teamBPlayers, false);
 }
 
 function hostResetPlay(rs, scoringTeam) {
@@ -519,7 +525,26 @@ function hostPhysicsTick(rs) {
     if (b.x - b.radius < BOUNDS.xMin) { b.x=BOUNDS.xMin+b.radius; b.vx=-b.vx*0.75; }
     else if (b.x + b.radius > BOUNDS.xMax) { b.x=BOUNDS.xMax-b.radius; b.vx=-b.vx*0.75; }
   }
-  // Player collisions
+
+  // Player vs Player elastic separation (prevents discs from overlapping or sandwiching ball)
+  for (let i = 0; i < rs.players.length; i++) {
+    const p1 = rs.players[i];
+    if (p1.slot === 'unassigned') continue;
+    for (let j = i + 1; j < rs.players.length; j++) {
+      const p2 = rs.players[j];
+      if (p2.slot === 'unassigned') continue;
+      const dx = p2.x - p1.x, dy = p2.y - p1.y, dist = Math.hypot(dx, dy);
+      const minDist = p1.radius + p2.radius;
+      if (dist < minDist && dist > 0) {
+        const overlap = (minDist - dist) * 0.5;
+        const nx = dx / dist, ny = dy / dist;
+        if (p1.isAI) { p1.x -= nx * overlap; p1.y -= ny * overlap; }
+        if (p2.isAI) { p2.x += nx * overlap; p2.y += ny * overlap; }
+      }
+    }
+  }
+
+  // Player vs Ball collisions
   rs.players.forEach(p => {
     if (p.slot==='unassigned') return;
     const dx=b.x-p.x, dy=b.y-p.y, dist=Math.hypot(dx,dy);
