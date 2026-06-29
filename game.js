@@ -406,42 +406,68 @@ function updateAiGoalkeepers(rs) {
   const b = rs.ball;
   rs.players.forEach(p => {
     if (!p.isAI) return;
-    let tx, ty, speedLimit = 8.5;
+    let tx, ty, speed = 9.0;
     if (p.slot === 'teamA_gk') {
-      const close = b.x < 350 && b.y >= 200 && b.y <= 650;
-      tx = close ? Math.max(120,Math.min(240,b.x)) : 150;
-      ty = Math.max(290,Math.min(560, 425 + (b.y-425)*0.45));
+      const inZone = b.x < 400 && b.y >= 180 && b.y <= 670;
+      if (inZone) {
+        tx = b.x - 20; ty = b.y;
+      } else {
+        tx = 160; ty = Math.max(280, Math.min(570, 425 + (b.y - 425) * 0.5));
+      }
     } else if (p.slot === 'teamB_gk') {
-      const close = b.x > 1050 && b.y >= 200 && b.y <= 650;
-      tx = close ? Math.max(1160,Math.min(1280,b.x)) : 1250;
-      ty = Math.max(290,Math.min(560, 425 + (b.y-425)*0.45));
+      const inZone = b.x > 1070 && b.y >= 180 && b.y <= 670;
+      if (inZone) {
+        tx = b.x + 20; ty = b.y;
+      } else {
+        tx = 1310; ty = Math.max(280, Math.min(570, 425 + (b.y - 425) * 0.5));
+      }
     } else { return; }
-    const dx=tx-p.x, dy=ty-p.y, dist=Math.sqrt(dx*dx+dy*dy);
-    if (dist > 0) {
-      const s = dist > speedLimit ? speedLimit : dist;
-      p.vx = (dx/dist)*s; p.vy = (dy/dist)*s;
-    } else { p.vx=0; p.vy=0; }
-    p.x += p.vx; p.y += p.vy;
+    const dx = tx - p.x, dy = ty - p.y, dist = Math.hypot(dx, dy);
+    if (dist > 1) {
+      const ms = Math.min(speed, dist);
+      p.vx = (dx / dist) * ms; p.vy = (dy / dist) * ms;
+      p.x += p.vx; p.y += p.vy;
+    } else { p.vx = 0; p.vy = 0; }
   });
 }
 
 function updateOutfieldAI(rs) {
   const b = rs.ball;
   rs.players.forEach(p => {
-    if (!p.isAI || p.slot==='teamA_gk' || p.slot==='teamB_gk') return;
+    if (!p.isAI || p.slot === 'teamA_gk' || p.slot === 'teamB_gk') return;
     const isA = p.slot.startsWith('teamA');
-    const speed = 5.5;
+    const speed = 7.5;
     let tx, ty;
-    if (p.slot.includes('striker'))       { tx=b.x; ty=b.y; }
-    else if (p.slot.includes('forward'))  { tx=isA?Math.max(b.x,700):Math.min(b.x,700); ty=b.y; }
-    else if (p.slot.includes('midfielder')){ const d=Math.hypot(b.x-p.x,b.y-p.y); tx=d<350?b.x:PITCH_WIDTH/2; ty=d<350?b.y:PITCH_HEIGHT/2; }
-    else if (p.slot.includes('defender')) { const defX=isA?320:PITCH_WIDTH-320; const inZ=isA?b.x<480:b.x>PITCH_WIDTH-480; tx=inZ?b.x:defX; ty=inZ?b.y:PITCH_HEIGHT/2; }
-    else return;
-    tx=Math.max(BOUNDS.xMin+5,Math.min(BOUNDS.xMax-5,tx));
-    ty=Math.max(BOUNDS.yMin+5,Math.min(BOUNDS.yMax-5,ty));
-    const dx=tx-p.x, dy=ty-p.y, dist=Math.hypot(dx,dy);
-    if (dist>2){ const ms=Math.min(speed,dist); p.vx=(dx/dist)*ms; p.vy=(dy/dist)*ms; p.x+=p.vx; p.y+=p.vy; }
-    else { p.vx=0; p.vy=0; }
+
+    if (p.slot.includes('striker') || p.slot.includes('forward')) {
+      const offsetX = isA ? -25 : 25;
+      tx = b.x + offsetX; ty = b.y;
+    } else if (p.slot.includes('midfielder')) {
+      const d = Math.hypot(b.x - p.x, b.y - p.y);
+      if (d < 450) {
+        const offsetX = isA ? -20 : 20;
+        tx = b.x + offsetX; ty = b.y;
+      } else {
+        tx = isA ? 550 : 920; ty = 425;
+      }
+    } else if (p.slot.includes('defender')) {
+      const inZone = isA ? b.x < 700 : b.x > 770;
+      if (inZone) {
+        const offsetX = isA ? -20 : 20;
+        tx = b.x + offsetX; ty = b.y;
+      } else {
+        tx = isA ? 350 : 1120; ty = PITCH_HEIGHT / 2;
+      }
+    } else return;
+
+    tx = Math.max(BOUNDS.xMin + 10, Math.min(BOUNDS.xMax - 10, tx));
+    ty = Math.max(BOUNDS.yMin + 10, Math.min(BOUNDS.yMax - 10, ty));
+    const dx = tx - p.x, dy = ty - p.y, dist = Math.hypot(dx, dy);
+    if (dist > 2) {
+      const ms = Math.min(speed, dist);
+      p.vx = (dx / dist) * ms; p.vy = (dy / dist) * ms;
+      p.x += p.vx; p.y += p.vy;
+    } else { p.vx = 0; p.vy = 0; }
   });
 }
 
