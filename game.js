@@ -327,7 +327,7 @@ function startGuestSync(code) {
         handleMessage(tickMsg);
       }
     }
-  }, 250);
+  }, 90);
 }
 
 function broadcastToAll(msg) {
