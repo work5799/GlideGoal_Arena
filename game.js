@@ -552,16 +552,38 @@ function broadcastRoomState() {
 }
 
 // ─── PeerJS Setup ─────────────────────────────────────────────────────────────
+// ICE servers: STUN (Google/Cloudflare) + free TURN (openrelay)
+// TURN servers allow connections across strict NATs & firewalls worldwide.
+const ICE_SERVERS = {
+  iceServers: [
+    // Google STUN servers (free, global)
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    // Cloudflare STUN (fast global edge)
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    // OpenRelay free TURN servers (allow connections through strict firewalls)
+    { urls: 'turn:openrelay.metered.ca:80',    username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443',   username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:80?transport=tcp',  username: 'openrelayproject', credential: 'openrelayproject' },
+  ]
+};
+
 function initPeer(id) {
-  return new Promise((resolve, reject) => {
-    const p = new Peer(id, { debug: 0 });
+  return new Promise((resolve) => {
+    const p = new Peer(id, {
+      debug: 0,
+      config: ICE_SERVERS
+    });
     p.on('open', (peerId) => { myId = peerId; resolve(p); });
     p.on('error', (err) => {
       if (err.type === 'unavailable-id') {
-        // ID collision — resolve without ID so caller retries with random
-        resolve(null);
+        resolve(null); // caller will retry with a random ID
       } else {
-        console.warn('Peer error:', err);
+        console.warn('Peer error:', err.type, err.message);
         resolve(null);
       }
     });
@@ -655,16 +677,23 @@ async function joinRoom() {
   const code = document.getElementById('roomCodeInput').value.trim().toUpperCase();
   if (code.length !== 6) { document.getElementById('lobbyError').innerText='Enter a valid 6-letter room code.'; return; }
   roomCode = code;
-  document.getElementById('lobbyError').innerText = 'Connecting...';
+  document.getElementById('lobbyError').innerText = '🔄 Connecting... (may take up to 15s across networks)';
   // Create peer with random ID for guest
   peer = await initPeer(`glidegoal-guest-${Date.now()}`);
-  if (!peer) { document.getElementById('lobbyError').innerText='Connection failed. Try again.'; return; }
+  if (!peer) { document.getElementById('lobbyError').innerText='❌ Connection failed. Try again.'; return; }
   myId = peer.id;
   isHost = false;
   const hostPeerId = generatePeerId(code, 'host');
-  const conn = peer.connect(hostPeerId, { metadata:{ name: playerName }, reliable: true });
+  const conn = peer.connect(hostPeerId, {
+    metadata: { name: playerName },
+    reliable: true,
+    serialization: 'json'
+  });
   hostConn = conn;
+  let connected = false;
+
   conn.on('open', () => {
+    connected = true;
     document.getElementById('lobbyError').innerText='';
     document.getElementById('displayRoomCode').innerText = code;
     document.getElementById('matchTimeSelect').disabled=true;
@@ -679,8 +708,10 @@ async function joinRoom() {
   conn.on('data', (msg) => { handleMessage(msg); });
   conn.on('close', () => { document.getElementById('lobbyError').innerText='Disconnected from room.'; });
   conn.on('error', (err) => { document.getElementById('lobbyError').innerText='Connection error: '+err; });
-  // Timeout
-  setTimeout(()=>{ if (!conn.open) document.getElementById('lobbyError').innerText='Room not found. Check the code.'; }, 8000);
+  // Extended timeout for cross-network TURN relay (15 seconds)
+  setTimeout(() => {
+    if (!connected) document.getElementById('lobbyError').innerText='❌ Room not found or host offline. Check the code and try again.';
+  }, 15000);
 }
 
 // ─── Game Controls → route to host ───────────────────────────────────────────
