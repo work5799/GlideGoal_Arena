@@ -772,8 +772,8 @@ function copyRoomCode() {
 }
 
 function updateTimerUI(seconds) {
-  const min=Math.floor(seconds/60), sec=seconds%60;
-  document.getElementById('hudTimer').innerText=`${min}:${sec<10?'0':''}${sec}`;
+  // Show as plain seconds so players can easily read remaining time
+  document.getElementById('hudTimer').innerText=`${seconds}s`;
 }
 
 function showAnnouncement(text) {
