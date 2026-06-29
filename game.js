@@ -215,12 +215,28 @@ function startHostSync(code) {
       }
     }
 
-    // 3. Prune disconnected / closed-tab players using heartbeats
+    // 3. Prune disconnected or auto-register missing guests via heartbeats
     if (roomState) {
       const hbs = await fbRead(`live_games/${code}/heartbeats`);
       if (hbs) {
         const now = Date.now();
         let changed = false;
+        
+        // Auto-register any active guest sending heartbeat if missing in players list
+        for (const [gId, hbTime] of Object.entries(hbs)) {
+          if (gId !== myId && !gId.startsWith('ai_')) {
+            let p = roomState.players.find(pl => pl.id === gId);
+            if (!p) {
+              roomState.players.push({
+                id: gId, name: 'Guest', slot: 'unassigned',
+                x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: false, flag: 'BAN',
+                stats: { touches: 0, goals: 0 }, joinedAt: Date.now()
+              });
+              changed = true;
+            }
+          }
+        }
+
         const initialCount = roomState.players.length;
         roomState.players = roomState.players.filter(p => {
           if (p.isHost || p.isAI) return true;
@@ -257,10 +273,17 @@ function startGuestSync(code) {
     
     // Read room state & timer
     const stateWrapper = await fbRead(`live_games/${code}/state`);
-    if (stateWrapper) {
-      if (stateWrapper.roomState) {
-        handleMessage({ type: 'room-state-updated', roomState: stateWrapper.roomState });
+    if (stateWrapper && stateWrapper.roomState) {
+      const rs = stateWrapper.roomState;
+      // Ensure self stays present locally in unassigned if Host hasn't synced us yet
+      if (myId && !rs.players.some(p => p.id === myId)) {
+        rs.players.push({
+          id: myId, name: playerName, slot: 'unassigned',
+          x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: false, flag: 'BAN',
+          stats: { touches: 0, goals: 0 }, joinedAt: Date.now()
+        });
       }
+      handleMessage({ type: 'room-state-updated', roomState: rs });
       if (stateWrapper.event && stateWrapper.event !== 'room-state-updated') {
         handleMessage(stateWrapper.eventData || { type: stateWrapper.event });
       }
@@ -1010,6 +1033,10 @@ async function joinRoom() {
     handleMessage(initialState);
   }
 
+  // Send join request via Firebase cloud relay & direct join node FIRST
+  fbWrite(`live_games/${code}/join_requests/${myId}`, { name: playerName, joinedAt: Date.now() });
+  sendToHost({ type:'guest-join', name: playerName });
+
   startGuestSync(code);
   document.getElementById('lobbyError').innerText='';
   document.getElementById('displayRoomCode').innerText = code;
@@ -1020,10 +1047,6 @@ async function joinRoom() {
   document.getElementById('startMatchBtn').style.display='none';
   document.getElementById('lobbyMenu').classList.add('hidden');
   document.getElementById('waitingRoom').classList.remove('hidden');
-
-  // Send join request via Firebase cloud relay & direct join node
-  fbWrite(`live_games/${code}/join_requests/${myId}`, { name: playerName, joinedAt: Date.now() });
-  sendToHost({ type:'guest-join', name: playerName });
 
   // Parallel WebRTC connection attempt
   if (peer && hostPeerId) {
