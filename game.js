@@ -177,11 +177,33 @@ function startHostSync(code) {
   if (syncIntervalId) clearInterval(syncIntervalId);
   startHeartbeat();
   fbDelete(`live_games/${code}/actions`);
+  fbDelete(`live_games/${code}/join_requests`);
   
   syncIntervalId = setInterval(async () => {
     if (!roomCode || !isHost) return;
     
-    // 1. Process guest actions posted to Firebase
+    // 1. Process direct join requests in Firebase
+    const joinReqs = await fbRead(`live_games/${code}/join_requests`);
+    if (joinReqs && roomState) {
+      let reqChanged = false;
+      for (const [gId, req] of Object.entries(joinReqs)) {
+        fbDelete(`live_games/${code}/join_requests/${gId}`);
+        if (gId !== myId) {
+          let p = roomState.players.find(pl => pl.id === gId);
+          if (!p) {
+            roomState.players.push({
+              id: gId, name: req.name || 'Guest', slot: 'unassigned',
+              x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: false, flag: 'BAN',
+              stats: { touches: 0, goals: 0 }, joinedAt: Date.now()
+            });
+            reqChanged = true;
+          }
+        }
+      }
+      if (reqChanged) broadcastRoomState();
+    }
+    
+    // 2. Process guest actions posted to Firebase
     const actionsObj = await fbRead(`live_games/${code}/actions`);
     if (actionsObj) {
       for (const [key, item] of Object.entries(actionsObj)) {
@@ -192,7 +214,7 @@ function startHostSync(code) {
       }
     }
 
-    // 2. Prune disconnected / closed-tab players using heartbeats
+    // 3. Prune disconnected / closed-tab players using heartbeats
     if (roomState) {
       const hbs = await fbRead(`live_games/${code}/heartbeats`);
       if (hbs) {
@@ -991,7 +1013,8 @@ async function joinRoom() {
   document.getElementById('lobbyMenu').classList.add('hidden');
   document.getElementById('waitingRoom').classList.remove('hidden');
 
-  // Send join request via Firebase cloud relay
+  // Send join request via Firebase cloud relay & direct join node
+  fbWrite(`live_games/${code}/join_requests/${myId}`, { name: playerName, joinedAt: Date.now() });
   sendToHost({ type:'guest-join', name: playerName });
 
   // Parallel WebRTC connection attempt
