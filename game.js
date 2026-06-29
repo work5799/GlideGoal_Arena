@@ -147,8 +147,14 @@ const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const sound = new SoundSynth();
 
-// Dynamic detection of server deployment: connects to local server OR deployed socket instance
-const socket = io(window.location.origin);
+// Connects to local server if running locally, otherwise connects to the deployed Render backend URL.
+// TODO: Replace the URL below with your actual Render backend URL after deploying server.js to Render.
+const BACKEND_URL = "https://glidegoal-arena-backend.onrender.com"; 
+const socket = io(
+  window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+    ? window.location.origin
+    : BACKEND_URL
+);
 
 const flagEmojis = {
   BAN: '🇧🇩', ARG: '🇦🇷', BRA: '🇧🇷', GER: '🇩🇪',
