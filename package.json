@@ -1,13 +1,12 @@
 {
-  "name": "football-multiplayer",
+  "name": "glidegoal-arena",
   "version": "1.0.0",
-  "description": "Multiplayer Flick Football Shootout Game",
+  "description": "GlideGoal Arena - PeerJS Signaling Server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "socket.io": "^4.7.5"
+    "peer": "^1.0.2"
   }
 }

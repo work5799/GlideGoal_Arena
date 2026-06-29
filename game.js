@@ -553,18 +553,14 @@ function broadcastRoomState() {
 
 // ─── PeerJS Setup ─────────────────────────────────────────────────────────────
 // ICE servers: STUN (Google/Cloudflare) + free TURN (openrelay)
-// TURN servers allow connections across strict NATs & firewalls worldwide.
 const ICE_SERVERS = {
   iceServers: [
-    // Google STUN servers (free, global)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
-    // Cloudflare STUN (fast global edge)
     { urls: 'stun:stun.cloudflare.com:3478' },
-    // OpenRelay free TURN servers (allow connections through strict firewalls)
     { urls: 'turn:openrelay.metered.ca:80',    username: 'openrelayproject', credential: 'openrelayproject' },
     { urls: 'turn:openrelay.metered.ca:443',   username: 'openrelayproject', credential: 'openrelayproject' },
     { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
@@ -572,16 +568,44 @@ const ICE_SERVERS = {
   ]
 };
 
+// ⚠️ TODO: After deploying server.js to Render, replace this URL with your Render URL.
+// Example: 'https://glidegoal-signal.onrender.com'
+// Leave as empty string to use the default PeerJS public server (less reliable).
+const SIGNAL_SERVER_URL = '';
+
+function buildPeerConfig(id) {
+  if (SIGNAL_SERVER_URL) {
+    // Use our own reliable PeerJS signaling server on Render
+    const url = new URL(SIGNAL_SERVER_URL);
+    return {
+      id,
+      host: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: '/peerjs',
+      secure: url.protocol === 'https:',
+      config: ICE_SERVERS,
+      debug: 0
+    };
+  } else {
+    // Fallback: PeerJS public cloud server
+    return {
+      id,
+      config: ICE_SERVERS,
+      debug: 0
+    };
+  }
+}
+
 function initPeer(id) {
   return new Promise((resolve) => {
-    const p = new Peer(id, {
-      debug: 0,
-      config: ICE_SERVERS
-    });
-    p.on('open', (peerId) => { myId = peerId; resolve(p); });
+    const cfg = buildPeerConfig(id);
+    const peerId = cfg.id;
+    delete cfg.id;
+    const p = new Peer(peerId, cfg);
+    p.on('open', (openId) => { myId = openId; resolve(p); });
     p.on('error', (err) => {
       if (err.type === 'unavailable-id') {
-        resolve(null); // caller will retry with a random ID
+        resolve(null);
       } else {
         console.warn('Peer error:', err.type, err.message);
         resolve(null);
