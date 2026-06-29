@@ -603,11 +603,10 @@ async function fbDelete(path) {
 function getFormattedDateParts() {
   const now = new Date();
   const year = now.getFullYear().toString();
-  const monthNames = ["01 (Jan)", "02 (Feb)", "03 (Mar)", "04 (Apr)", "05 (May)", "06 (Jun)", "07 (Jul)", "08 (Aug)", "09 (Sep)", "10 (Oct)", "11 (Nov)", "12 (Dec)"];
-  const month = monthNames[now.getMonth()];
+  const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
   const timeStr = now.toLocaleTimeString();
-  const dateKey = `${year}-${String(now.getMonth()+1).padStart(2,'0')}-${day}`;
+  const dateKey = `${year}-${month}-${day}`;
   return { year, month, day, timeStr, dateKey };
 }
 
@@ -641,7 +640,6 @@ function initPeer(id) {
 function attachGuestConn(conn) {
   conn.on('open', () => {
     guestConns.push(conn);
-    // Add guest to room players
     const rs = roomState;
     if (!rs) return;
     rs.players.push({
@@ -653,7 +651,6 @@ function attachGuestConn(conn) {
     broadcastRoomState();
   });
   conn.on('data', (msg) => {
-    // Run as host
     processHostMessage(msg, conn.peer);
   });
   conn.on('close', () => {
@@ -664,7 +661,6 @@ function attachGuestConn(conn) {
     if (idx!==-1) {
       const p=rs.players[idx];
       rs.players.splice(idx,1);
-      // Pass host if needed
       if (p.isHost && rs.players.length>0) {
         const nextHuman=rs.players.find(pl=>!pl.isAI);
         if (nextHuman) nextHuman.isHost=true;
@@ -693,7 +689,6 @@ async function createRoom() {
   document.getElementById('lobbyError').innerText = '⏳ Creating room...';
   roomCode = generateRoomCode();
 
-  // Create a PeerJS peer with a random ID
   peer = await initPeer(`gg-${roomCode}-${Date.now()}`);
   if (!peer) {
     document.getElementById('lobbyError').innerText = '❌ Failed to create peer. Try again.';
@@ -705,28 +700,30 @@ async function createRoom() {
   const { year, month, day, timeStr, dateKey } = getFormattedDateParts();
   const roomPath = `rooms/${year}/${month}/${day}/${roomCode}`;
 
-  // 1. Write active room lookup for instant guest joining
-  const ok = await fbWrite(`active_rooms/${roomCode}`, {
-    hostPeerId: myId,
-    host: playerName,
-    roomPath: roomPath,
-    created: Date.now()
-  });
-  if (!ok) {
-    document.getElementById('lobbyError').innerText = '❌ Firebase not configured. See game.js setup instructions.';
-    return;
-  }
-
-  // 2. Structured log in Firebase by Year > Month > Date for Admin viewing
-  await fbWrite(roomPath, {
+  const roomData = {
     host: playerName,
     hostPeerId: myId,
     code: roomCode,
     created_at: timeStr,
     status: 'active'
+  };
+
+  // 1. Write structured log in Firebase by Year > Month > Date
+  const ok1 = await fbWrite(roomPath, roomData);
+
+  // 2. Write quick index for guest lookup
+  const ok2 = await fbWrite(`room_index/${roomCode}`, {
+    hostPeerId: myId,
+    roomPath: roomPath,
+    host: playerName
   });
 
-  // 3. Update dynamic analytics counters in Firebase
+  if (!ok1 && !ok2) {
+    document.getElementById('lobbyError').innerText = '❌ Firebase error. Check connection.';
+    return;
+  }
+
+  // 3. Update dynamic analytics
   (async () => {
     const total = (await fbRead('analytics/total_rooms_all_time')) || 0;
     await fbWrite('analytics/total_rooms_all_time', total + 1);
@@ -749,12 +746,10 @@ async function createRoom() {
     ball:{x:PITCH_WIDTH/2, y:PITCH_HEIGHT/2, vx:0, vy:0, radius:18, damping:0.985}
   };
 
-  // Listen for incoming guest connections
   peer.on('connection', (conn) => { attachGuestConn(conn); });
 
-  // Clean up Firebase when host closes tab
   window.addEventListener('beforeunload', () => {
-    fbDelete(`active_rooms/${roomCode}`);
+    fbDelete(`room_index/${roomCode}`);
     fbPatch(roomPath, { status: 'closed' });
   });
 
@@ -774,29 +769,35 @@ async function joinRoom() {
   if (code.length !== 6) { document.getElementById('lobbyError').innerText='Enter a valid 6-letter room code.'; return; }
   roomCode = code;
 
-  // Step 1: Look up active room from Firebase
   document.getElementById('lobbyError').innerText = '🔄 Finding room...';
-  let roomData = await fbRead(`active_rooms/${code}`);
   
-  // Fallback to direct room check if not in active_rooms
-  if (!roomData || !roomData.hostPeerId) {
+  // Multi-stage fallback lookup
+  let indexData = await fbRead(`room_index/${code}`);
+  let hostPeerId = indexData?.hostPeerId;
+
+  if (!hostPeerId) {
     const { year, month, day } = getFormattedDateParts();
-    roomData = await fbRead(`rooms/${year}/${month}/${day}/${code}`);
+    const directData = await fbRead(`rooms/${year}/${month}/${day}/${code}`);
+    hostPeerId = directData?.hostPeerId;
   }
 
-  if (!roomData || !roomData.hostPeerId) {
+  if (!hostPeerId) {
+    const legacyData = await fbRead(`active_rooms/${code}`);
+    hostPeerId = legacyData?.hostPeerId;
+  }
+
+  if (!hostPeerId) {
     document.getElementById('lobbyError').innerText = '❌ Room not found. Check the code and make sure host is online.';
     return;
   }
 
-  // Step 2: Create our peer and connect to host via WebRTC
   document.getElementById('lobbyError').innerText = '🔄 Connecting to host...';
   peer = await initPeer(`gg-guest-${Date.now()}`);
   if (!peer) { document.getElementById('lobbyError').innerText='❌ Connection failed. Try again.'; return; }
   myId = peer.id;
   isHost = false;
 
-  const conn = peer.connect(roomData.hostPeerId, {
+  const conn = peer.connect(hostPeerId, {
     metadata: { name: playerName },
     reliable: true,
     serialization: 'json'
@@ -820,11 +821,13 @@ async function joinRoom() {
   conn.on('data', (msg) => { handleMessage(msg); });
   conn.on('close', () => { document.getElementById('lobbyError').innerText='Disconnected from room.'; });
   conn.on('error', (err) => { document.getElementById('lobbyError').innerText='Connection error. Try again.'; });
-  // Timeout for TURN relay
+  
   setTimeout(() => {
     if (!connected) document.getElementById('lobbyError').innerText='❌ Could not reach host. They may have left or changed network.';
   }, 15000);
 }
+
+
 
 // ─── Game Controls → route to host ───────────────────────────────────────────
 function changeFlag(flag) {
