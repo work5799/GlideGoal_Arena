@@ -576,6 +576,17 @@ async function fbWrite(path, data) {
   } catch(e) { console.error('FB write error', e); return false; }
 }
 
+async function fbPatch(path, data) {
+  try {
+    const r = await fetch(`${FIREBASE_DB_URL}/${path}.json`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    return r.ok;
+  } catch(e) { return false; }
+}
+
 async function fbRead(path) {
   try {
     const r = await fetch(`${FIREBASE_DB_URL}/${path}.json`);
@@ -587,6 +598,17 @@ async function fbRead(path) {
 async function fbDelete(path) {
   try { await fetch(`${FIREBASE_DB_URL}/${path}.json`, { method: 'DELETE' }); }
   catch(e) {}
+}
+
+function getFormattedDateParts() {
+  const now = new Date();
+  const year = now.getFullYear().toString();
+  const monthNames = ["01 (Jan)", "02 (Feb)", "03 (Mar)", "04 (Apr)", "05 (May)", "06 (Jun)", "07 (Jul)", "08 (Aug)", "09 (Sep)", "10 (Oct)", "11 (Nov)", "12 (Dec)"];
+  const month = monthNames[now.getMonth()];
+  const day = String(now.getDate()).padStart(2, '0');
+  const timeStr = now.toLocaleTimeString();
+  const dateKey = `${year}-${String(now.getMonth()+1).padStart(2,'0')}-${day}`;
+  return { year, month, day, timeStr, dateKey };
 }
 
 // ─── ICE Servers: STUN + TURN for NAT traversal ──────────────────────────────
@@ -680,16 +702,38 @@ async function createRoom() {
   isHost = true;
   myId = peer.id;
 
-  // Publish our peer ID to Firebase so guests can find us from ANY network
-  const ok = await fbWrite(`rooms/${roomCode}`, {
+  const { year, month, day, timeStr, dateKey } = getFormattedDateParts();
+  const roomPath = `rooms/${year}/${month}/${day}/${roomCode}`;
+
+  // 1. Write active room lookup for instant guest joining
+  const ok = await fbWrite(`active_rooms/${roomCode}`, {
     hostPeerId: myId,
     host: playerName,
+    roomPath: roomPath,
     created: Date.now()
   });
   if (!ok) {
     document.getElementById('lobbyError').innerText = '❌ Firebase not configured. See game.js setup instructions.';
     return;
   }
+
+  // 2. Structured log in Firebase by Year > Month > Date for Admin viewing
+  await fbWrite(roomPath, {
+    host: playerName,
+    hostPeerId: myId,
+    code: roomCode,
+    created_at: timeStr,
+    status: 'active'
+  });
+
+  // 3. Update dynamic analytics counters in Firebase
+  (async () => {
+    const total = (await fbRead('analytics/total_rooms_all_time')) || 0;
+    await fbWrite('analytics/total_rooms_all_time', total + 1);
+
+    const todayTotal = (await fbRead(`analytics/daily/${dateKey}/rooms_created`)) || 0;
+    await fbWrite(`analytics/daily/${dateKey}/rooms_created`, todayTotal + 1);
+  })();
 
   document.getElementById('lobbyError').innerText = '';
   roomState = {
@@ -709,7 +753,10 @@ async function createRoom() {
   peer.on('connection', (conn) => { attachGuestConn(conn); });
 
   // Clean up Firebase when host closes tab
-  window.addEventListener('beforeunload', () => fbDelete(`rooms/${roomCode}`));
+  window.addEventListener('beforeunload', () => {
+    fbDelete(`active_rooms/${roomCode}`);
+    fbPatch(roomPath, { status: 'closed' });
+  });
 
   document.getElementById('displayRoomCode').innerText = roomCode;
   document.getElementById('matchTimeSelect').disabled=false;
@@ -727,11 +774,18 @@ async function joinRoom() {
   if (code.length !== 6) { document.getElementById('lobbyError').innerText='Enter a valid 6-letter room code.'; return; }
   roomCode = code;
 
-  // Step 1: Look up the host's peer ID from Firebase (works from any network)
+  // Step 1: Look up active room from Firebase
   document.getElementById('lobbyError').innerText = '🔄 Finding room...';
-  const roomData = await fbRead(`rooms/${code}`);
+  let roomData = await fbRead(`active_rooms/${code}`);
+  
+  // Fallback to direct room check if not in active_rooms
   if (!roomData || !roomData.hostPeerId) {
-    document.getElementById('lobbyError').innerText = '❌ Room not found. Check the code and make sure the host has created the room.';
+    const { year, month, day } = getFormattedDateParts();
+    roomData = await fbRead(`rooms/${year}/${month}/${day}/${code}`);
+  }
+
+  if (!roomData || !roomData.hostPeerId) {
+    document.getElementById('lobbyError').innerText = '❌ Room not found. Check the code and make sure host is online.';
     return;
   }
 
