@@ -551,8 +551,45 @@ function broadcastRoomState() {
   handleMessage(msg); // host also updates locally
 }
 
-// ─── PeerJS Setup ─────────────────────────────────────────────────────────────
-// ICE servers: STUN (Google/Cloudflare) + free TURN (openrelay)
+// ─── Firebase Signaling (REST API — no SDK, no backend needed) ───────────────
+// Firebase Realtime Database is globally distributed (Google infra).
+// It stores just the host's PeerJS ID so guests can find them from ANY network.
+//
+// HOW TO SET UP (one-time, 3 minutes):
+//  1. Go to https://console.firebase.google.com
+//  2. Click "Add project" → name it (e.g. glidegoal) → Continue → Create
+//  3. Left menu: Build → Realtime Database → Create database
+//  4. Choose any region → Start in TEST MODE → Enable
+//  5. Copy the URL shown (e.g. https://glidegoal-xxxxx-default-rtdb.firebaseio.com)
+//  6. Paste it below and tell the developer to push the change.
+
+const FIREBASE_DB_URL = 'https://glidegoal-arena-default-rtdb.firebaseio.com';
+
+async function fbWrite(path, data) {
+  try {
+    const r = await fetch(`${FIREBASE_DB_URL}/${path}.json`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    return r.ok;
+  } catch(e) { console.error('FB write error', e); return false; }
+}
+
+async function fbRead(path) {
+  try {
+    const r = await fetch(`${FIREBASE_DB_URL}/${path}.json`);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch(e) { console.error('FB read error', e); return null; }
+}
+
+async function fbDelete(path) {
+  try { await fetch(`${FIREBASE_DB_URL}/${path}.json`, { method: 'DELETE' }); }
+  catch(e) {}
+}
+
+// ─── ICE Servers: STUN + TURN for NAT traversal ──────────────────────────────
 const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -568,48 +605,13 @@ const ICE_SERVERS = {
   ]
 };
 
-// ⚠️ TODO: After deploying server.js to Render, replace this URL with your Render URL.
-// Example: 'https://glidegoal-signal.onrender.com'
-// Leave as empty string to use the default PeerJS public server (less reliable).
-const SIGNAL_SERVER_URL = '';
-
-function buildPeerConfig(id) {
-  if (SIGNAL_SERVER_URL) {
-    // Use our own reliable PeerJS signaling server on Render
-    const url = new URL(SIGNAL_SERVER_URL);
-    return {
-      id,
-      host: url.hostname,
-      port: url.port || (url.protocol === 'https:' ? 443 : 80),
-      path: '/peerjs',
-      secure: url.protocol === 'https:',
-      config: ICE_SERVERS,
-      debug: 0
-    };
-  } else {
-    // Fallback: PeerJS public cloud server
-    return {
-      id,
-      config: ICE_SERVERS,
-      debug: 0
-    };
-  }
-}
-
 function initPeer(id) {
   return new Promise((resolve) => {
-    const cfg = buildPeerConfig(id);
-    const peerId = cfg.id;
-    delete cfg.id;
-    const p = new Peer(peerId, cfg);
+    const p = new Peer(id, { config: ICE_SERVERS, debug: 0 });
     p.on('open', (openId) => { myId = openId; resolve(p); });
     p.on('error', (err) => {
-      if (err.type === 'unavailable-id') {
-        resolve(null);
-      } else {
-        console.warn('Peer error:', err.type, err.message);
-        resolve(null);
-      }
+      if (err.type === 'unavailable-id') resolve(null);
+      else { console.warn('Peer error:', err.type); resolve(null); }
     });
   });
 }
@@ -666,12 +668,30 @@ function backToLogin() {
 }
 
 async function createRoom() {
+  document.getElementById('lobbyError').innerText = '⏳ Creating room...';
   roomCode = generateRoomCode();
-  const hostPeerId = generatePeerId(roomCode, 'host');
-  peer = await initPeer(hostPeerId);
-  if (!peer) { peer = await initPeer(`${hostPeerId}-${Date.now()}`); }
+
+  // Create a PeerJS peer with a random ID
+  peer = await initPeer(`gg-${roomCode}-${Date.now()}`);
+  if (!peer) {
+    document.getElementById('lobbyError').innerText = '❌ Failed to create peer. Try again.';
+    return;
+  }
   isHost = true;
   myId = peer.id;
+
+  // Publish our peer ID to Firebase so guests can find us from ANY network
+  const ok = await fbWrite(`rooms/${roomCode}`, {
+    hostPeerId: myId,
+    host: playerName,
+    created: Date.now()
+  });
+  if (!ok) {
+    document.getElementById('lobbyError').innerText = '❌ Firebase not configured. See game.js setup instructions.';
+    return;
+  }
+
+  document.getElementById('lobbyError').innerText = '';
   roomState = {
     id: roomCode,
     players: [{
@@ -684,8 +704,13 @@ async function createRoom() {
     scores:{A:0,B:0}, gameState:'lobby',
     ball:{x:PITCH_WIDTH/2, y:PITCH_HEIGHT/2, vx:0, vy:0, radius:18, damping:0.985}
   };
+
   // Listen for incoming guest connections
   peer.on('connection', (conn) => { attachGuestConn(conn); });
+
+  // Clean up Firebase when host closes tab
+  window.addEventListener('beforeunload', () => fbDelete(`rooms/${roomCode}`));
+
   document.getElementById('displayRoomCode').innerText = roomCode;
   document.getElementById('matchTimeSelect').disabled=false;
   document.getElementById('maxPlayersSelect').disabled=false;
@@ -701,14 +726,23 @@ async function joinRoom() {
   const code = document.getElementById('roomCodeInput').value.trim().toUpperCase();
   if (code.length !== 6) { document.getElementById('lobbyError').innerText='Enter a valid 6-letter room code.'; return; }
   roomCode = code;
-  document.getElementById('lobbyError').innerText = '🔄 Connecting... (may take up to 15s across networks)';
-  // Create peer with random ID for guest
-  peer = await initPeer(`glidegoal-guest-${Date.now()}`);
+
+  // Step 1: Look up the host's peer ID from Firebase (works from any network)
+  document.getElementById('lobbyError').innerText = '🔄 Finding room...';
+  const roomData = await fbRead(`rooms/${code}`);
+  if (!roomData || !roomData.hostPeerId) {
+    document.getElementById('lobbyError').innerText = '❌ Room not found. Check the code and make sure the host has created the room.';
+    return;
+  }
+
+  // Step 2: Create our peer and connect to host via WebRTC
+  document.getElementById('lobbyError').innerText = '🔄 Connecting to host...';
+  peer = await initPeer(`gg-guest-${Date.now()}`);
   if (!peer) { document.getElementById('lobbyError').innerText='❌ Connection failed. Try again.'; return; }
   myId = peer.id;
   isHost = false;
-  const hostPeerId = generatePeerId(code, 'host');
-  const conn = peer.connect(hostPeerId, {
+
+  const conn = peer.connect(roomData.hostPeerId, {
     metadata: { name: playerName },
     reliable: true,
     serialization: 'json'
@@ -731,10 +765,10 @@ async function joinRoom() {
   });
   conn.on('data', (msg) => { handleMessage(msg); });
   conn.on('close', () => { document.getElementById('lobbyError').innerText='Disconnected from room.'; });
-  conn.on('error', (err) => { document.getElementById('lobbyError').innerText='Connection error: '+err; });
-  // Extended timeout for cross-network TURN relay (15 seconds)
+  conn.on('error', (err) => { document.getElementById('lobbyError').innerText='Connection error. Try again.'; });
+  // Timeout for TURN relay
   setTimeout(() => {
-    if (!connected) document.getElementById('lobbyError').innerText='❌ Room not found or host offline. Check the code and try again.';
+    if (!connected) document.getElementById('lobbyError').innerText='❌ Could not reach host. They may have left or changed network.';
   }, 15000);
 }
 
