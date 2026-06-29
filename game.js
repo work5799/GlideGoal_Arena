@@ -468,71 +468,20 @@ function updateAiGoalkeepers(rs) {
 function updateOutfieldAI(rs) {
   const b = rs.ball;
   rs.players.forEach(p => {
-    if (!p.isAI || p.slot === 'teamA_gk' || p.slot === 'teamB_gk') return;
+    if (!p.isAI || p.slot==='teamA_gk' || p.slot==='teamB_gk') return;
     const isA = p.slot.startsWith('teamA');
-    const speed = 6.5;
-
-    const distToBall = Math.hypot(b.x - p.x, b.y - p.y);
-    const hasBall = distToBall < p.radius + b.radius + 18;
-
-    if (hasBall) {
-      // AI Has Ball! Realistic Team Passing & Shooting Logic
-      const teammates = rs.players.filter(other => 
-        other.id !== p.id && 
-        other.slot.startsWith(isA ? 'teamA' : 'teamB') && 
-        other.slot !== (isA ? 'teamA_gk' : 'teamB_gk')
-      );
-
-      const openTeammate = teammates.find(tm => isA ? (tm.x > p.x - 50) : (tm.x < p.x + 50));
-
-      if (openTeammate && Math.random() < 0.85) {
-        // PASS TO TEAMMATE!
-        const passDx = openTeammate.x - b.x;
-        const passDy = openTeammate.y - b.y;
-        const passDist = Math.hypot(passDx, passDy) || 1;
-        const passSpeed = 14.0;
-        b.vx = (passDx / passDist) * passSpeed;
-        b.vy = (passDy / passDist) * passSpeed;
-        sound.playKick();
-      } else {
-        // SHOOT AT OPPONENT GOAL!
-        const targetX = isA ? 1320 : 80;
-        const targetY = 425 + (Math.random() * 120 - 60);
-        const shootDx = targetX - b.x;
-        const shootDy = targetY - b.y;
-        const shootDist = Math.hypot(shootDx, shootDy) || 1;
-        const shootSpeed = 16.0;
-        b.vx = (shootDx / shootDist) * shootSpeed;
-        b.vy = (shootDy / shootDist) * shootSpeed;
-        sound.playKick();
-      }
-    } else {
-      // Chase & Positional Play
-      let tx, ty;
-      if (p.slot.includes('striker')) {
-        tx = b.x; ty = b.y;
-      } else if (p.slot.includes('forward')) {
-        tx = isA ? Math.max(b.x, 700) : Math.min(b.x, 700); ty = b.y;
-      } else if (p.slot.includes('midfielder')) {
-        const d = Math.hypot(b.x - p.x, b.y - p.y);
-        tx = d < 400 ? b.x : PITCH_WIDTH / 2; ty = d < 400 ? b.y : PITCH_HEIGHT / 2;
-      } else if (p.slot.includes('defender')) {
-        const defX = isA ? 320 : PITCH_WIDTH - 320;
-        const inZ = isA ? b.x < 500 : b.x > PITCH_WIDTH - 500;
-        tx = inZ ? b.x : defX; ty = inZ ? b.y : PITCH_HEIGHT / 2;
-      } else { return; }
-
-      tx = Math.max(BOUNDS.xMin + 10, Math.min(BOUNDS.xMax - 10, tx));
-      ty = Math.max(BOUNDS.yMin + 10, Math.min(BOUNDS.yMax - 10, ty));
-      const dx = tx - p.x, dy = ty - p.y, dist = Math.hypot(dx, dy);
-      if (dist > 2) {
-        const ms = Math.min(speed, dist);
-        p.vx = (dx / dist) * ms; p.vy = (dy / dist) * ms;
-        p.x += p.vx; p.y += p.vy;
-      } else {
-        p.vx = 0; p.vy = 0;
-      }
-    }
+    const speed = 5.5;
+    let tx, ty;
+    if (p.slot.includes('striker'))       { tx=b.x; ty=b.y; }
+    else if (p.slot.includes('forward'))  { tx=isA?Math.max(b.x,700):Math.min(b.x,700); ty=b.y; }
+    else if (p.slot.includes('midfielder')){ const d=Math.hypot(b.x-p.x,b.y-p.y); tx=d<350?b.x:PITCH_WIDTH/2; ty=d<350?b.y:PITCH_HEIGHT/2; }
+    else if (p.slot.includes('defender')) { const defX=isA?320:PITCH_WIDTH-320; const inZ=isA?b.x<480:b.x>PITCH_WIDTH-480; tx=inZ?b.x:defX; ty=inZ?b.y:PITCH_HEIGHT/2; }
+    else return;
+    tx=Math.max(BOUNDS.xMin+5,Math.min(BOUNDS.xMax-5,tx));
+    ty=Math.max(BOUNDS.yMin+5,Math.min(BOUNDS.yMax-5,ty));
+    const dx=tx-p.x, dy=ty-p.y, dist=Math.hypot(dx,dy);
+    if (dist>2){ const ms=Math.min(speed,dist); p.vx=(dx/dist)*ms; p.vy=(dy/dist)*ms; p.x+=p.vx; p.y+=p.vy; }
+    else { p.vx=0; p.vy=0; }
   });
 }
 
