@@ -557,10 +557,11 @@ function hostPhysicsTick(rs) {
       const rvx=b.vx-p.vx, rvy=b.vy-p.vy;
       const vaN=rvx*nx+rvy*ny;
       if (vaN < 0) {
-        const imp=-(1 + 0.75)*vaN;
-        b.vx+=nx*imp; b.vy+=ny*imp;
+        const imp=-(1 + 0.82)*vaN;
+        b.vx+=nx*imp + (p.vx||0)*0.3;
+        b.vy+=ny*imp + (p.vy||0)*0.3;
       }
-      const bspd=Math.hypot(b.vx,b.vy), sl=rs.ballSpeedLimit||20;
+      const bspd=Math.hypot(b.vx,b.vy), sl=rs.ballSpeedLimit||22;
       if (bspd>sl){ b.vx=(b.vx/bspd)*sl; b.vy=(b.vy/bspd)*sl; }
     }
   });
@@ -1046,7 +1047,7 @@ async function createRoom() {
     matchTime:60, maxPlayers:2, aiGoalkeepers:false,
     ballSpeedLimit:20, timeRemaining:60,
     scores:{A:0,B:0}, gameState:'lobby',
-    ball:{x:PITCH_WIDTH/2, y:PITCH_HEIGHT/2, vx:0, vy:0, radius:18, damping:0.985}
+    ball:{x:PITCH_WIDTH/2, y:PITCH_HEIGHT/2, vx:0, vy:0, radius:18, damping:0.988}
   };
 
   peer.on('connection', (conn) => { attachGuestConn(conn); });
