@@ -164,11 +164,13 @@ let lastFbTickTime = 0;
 
 function startHeartbeat() {
   if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
-  heartbeatIntervalId = setInterval(() => {
+  const sendHb = () => {
     if (roomCode && myId) {
       fbWrite(`live_games/${roomCode}/heartbeats/${myId}`, Date.now());
     }
-  }, 2500);
+  };
+  sendHb(); // Send IMMEDIATELY on start
+  heartbeatIntervalId = setInterval(sendHb, 2500);
 }
 
 function startHostSync(code) {
@@ -199,8 +201,17 @@ function startHostSync(code) {
         const initialCount = roomState.players.length;
         roomState.players = roomState.players.filter(p => {
           if (p.isHost || p.isAI) return true;
+          // Grace period: new joins have 12s immunity
+          if (p.joinedAt && (now - p.joinedAt < 12000)) return true;
           const lastHb = hbs[p.id];
-          if (!lastHb || (now - lastHb > 8000)) {
+          if (lastHb) {
+            if (now - lastHb > 12000) {
+              changed = true;
+              return false;
+            }
+            return true;
+          }
+          if (p.joinedAt && (now - p.joinedAt >= 12000)) {
             changed = true;
             return false;
           }
@@ -561,7 +572,7 @@ function processHostMessage(msg, fromId) {
         player = {
           id: fromId, name: msg.name || 'Guest', slot: 'unassigned',
           x:0, y:0, vx:0, vy:0, radius:30, isHost:false, flag:'BAN',
-          stats:{touches:0,goals:0}
+          stats:{touches:0,goals:0}, joinedAt: Date.now()
         };
         rs.players.push(player);
       }
@@ -574,7 +585,7 @@ function processHostMessage(msg, fromId) {
     case 'select-flag': {
       let player=rs.players.find(p=>p.id===fromId);
       if (!player) {
-        player = { id: fromId, name: msg.name || 'Guest', slot:'unassigned', x:0, y:0, vx:0, vy:0, radius:30, isHost:false, flag:msg.flag, stats:{touches:0,goals:0} };
+        player = { id: fromId, name: msg.name || 'Guest', slot:'unassigned', x:0, y:0, vx:0, vy:0, radius:30, isHost:false, flag:msg.flag, stats:{touches:0,goals:0}, joinedAt: Date.now() };
         rs.players.push(player);
       } else { player.flag=msg.flag; }
       broadcastRoomState();
@@ -669,7 +680,8 @@ function processHostMessage(msg, fromId) {
           slot: 'unassigned',
           x: 0, y: 0, vx: 0, vy: 0,
           radius: 30, isHost: false, flag: 'BAN',
-          stats: { touches: 0, goals: 0 }
+          stats: { touches: 0, goals: 0 },
+          joinedAt: Date.now()
         };
         rs.players.push(player);
       } else if (msg.name && player.name !== msg.name) {
