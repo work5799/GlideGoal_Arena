@@ -145,7 +145,8 @@ function cleanRoomState(state) {
       x:p.x, y:p.y, vx:p.vx||0, vy:p.vy||0,
       radius:p.radius, isHost:p.isHost,
       flag:p.flag, isAI:p.isAI||false, isSlotAI:p.isSlotAI||false,
-      stats:p.stats||{touches:0,goals:0}
+      stats:p.stats||{touches:0,goals:0},
+      joinedAt: p.joinedAt || Date.now()
     })),
     matchTime:   state.matchTime,
     maxPlayers:  state.maxPlayers,
@@ -999,6 +1000,13 @@ async function joinRoom() {
   // Immediately fetch initial state so Team A / Team B slots render INSTANTLY
   const initialState = await fbRead(`live_games/${code}/state`);
   if (initialState && initialState.roomState) {
+    if (!initialState.roomState.players.some(p => p.id === myId)) {
+      initialState.roomState.players.push({
+        id: myId, name: playerName, slot: 'unassigned',
+        x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: false, flag: 'BAN',
+        stats: { touches: 0, goals: 0 }, joinedAt: Date.now()
+      });
+    }
     handleMessage(initialState);
   }
 
