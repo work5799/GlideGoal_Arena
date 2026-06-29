@@ -167,7 +167,8 @@ function startHeartbeat() {
   if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
   const sendHb = () => {
     if (roomCode && myId) {
-      fbWrite(`live_games/${roomCode}/heartbeats/${myId}`, Date.now());
+      const pName = (typeof playerName !== 'undefined' && playerName) ? playerName : 'Guest';
+      fbWrite(`live_games/${roomCode}/heartbeats/${myId}`, { time: Date.now(), name: pName });
     }
   };
   sendHb(); // Send IMMEDIATELY on start
@@ -191,12 +192,16 @@ function startHostSync(code) {
         fbDelete(`live_games/${code}/join_requests/${gId}`);
         if (gId !== myId) {
           let p = roomState.players.find(pl => pl.id === gId);
+          const nameToUse = (typeof req === 'object' && req.name) ? req.name : (typeof req === 'string' ? req : 'Guest');
           if (!p) {
             roomState.players.push({
-              id: gId, name: req.name || 'Guest', slot: 'unassigned',
+              id: gId, name: nameToUse, slot: 'unassigned',
               x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: false, flag: 'BAN',
               stats: { touches: 0, goals: 0 }, joinedAt: Date.now()
             });
+            reqChanged = true;
+          } else if (p.name === 'Guest' && nameToUse !== 'Guest') {
+            p.name = nameToUse;
             reqChanged = true;
           }
         }
@@ -223,15 +228,19 @@ function startHostSync(code) {
         let changed = false;
         
         // Auto-register any active guest sending heartbeat if missing in players list
-        for (const [gId, hbTime] of Object.entries(hbs)) {
+        for (const [gId, hbData] of Object.entries(hbs)) {
           if (gId !== myId && !gId.startsWith('ai_')) {
+            const hbObj = (typeof hbData === 'object' && hbData !== null) ? hbData : { time: hbData, name: 'Guest' };
             let p = roomState.players.find(pl => pl.id === gId);
             if (!p) {
               roomState.players.push({
-                id: gId, name: 'Guest', slot: 'unassigned',
+                id: gId, name: hbObj.name || 'Guest', slot: 'unassigned',
                 x: 0, y: 0, vx: 0, vy: 0, radius: 30, isHost: false, flag: 'BAN',
                 stats: { touches: 0, goals: 0 }, joinedAt: Date.now()
               });
+              changed = true;
+            } else if (p.name === 'Guest' && hbObj.name && hbObj.name !== 'Guest') {
+              p.name = hbObj.name;
               changed = true;
             }
           }
@@ -242,9 +251,10 @@ function startHostSync(code) {
           if (p.isHost || p.isAI) return true;
           // Grace period: new joins have 12s immunity
           if (p.joinedAt && (now - p.joinedAt < 12000)) return true;
-          const lastHb = hbs[p.id];
-          if (lastHb) {
-            if (now - lastHb > 12000) {
+          const rawHb = hbs[p.id];
+          const lastHbTime = (typeof rawHb === 'object' && rawHb !== null) ? rawHb.time : rawHb;
+          if (lastHbTime) {
+            if (now - lastHbTime > 12000) {
               changed = true;
               return false;
             }
