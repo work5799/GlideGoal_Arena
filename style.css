@@ -588,58 +588,69 @@ h1 {
 
 .player-stats-panel {
   position: absolute;
-  top: 90px;
-  left: 5%;
+  top: 80px;
+  left: 12px;
   z-index: 5;
-  background: rgba(21, 29, 42, 0.85);
-  backdrop-filter: blur(6px);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 10px;
-  padding: 12px;
-  width: 180px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  background: rgba(10, 14, 22, 0.28);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  padding: 7px 10px;
+  width: 140px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.15);
   pointer-events: none;
+  opacity: 0.55;
+  transition: opacity 0.3s ease;
+}
+
+.player-stats-panel:hover {
+  opacity: 0.9;
 }
 
 .stats-header {
-  font-size: 0.7rem;
+  font-size: 0.6rem;
   font-weight: 800;
-  color: var(--text-muted);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  padding-bottom: 6px;
-  margin-bottom: 8px;
+  color: rgba(156, 163, 175, 0.7);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  padding-bottom: 4px;
+  margin-bottom: 5px;
   letter-spacing: 0.5px;
+  text-transform: uppercase;
 }
 
 .stats-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 3px;
 }
 
 .stats-entry {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 0.8rem;
+  font-size: 0.72rem;
 }
 
 .stats-player-name {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   font-weight: 600;
+  color: rgba(255,255,255,0.75);
 }
 
 .stats-player-name .dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .stats-score {
-  color: #fff;
-  font-weight: 800;
+  color: rgba(255,255,255,0.6);
+  font-weight: 700;
+  font-size: 0.7rem;
 }
 
 /* Goals announcements overlay */
