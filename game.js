@@ -158,13 +158,70 @@ function cleanRoomState(state) {
   };
 }
 
+let fbActionsSource = null;
+let fbStateSource = null;
+
+function startHostFirebaseListener(code) {
+  if (fbActionsSource) fbActionsSource.close();
+  fbDelete(`live_games/${code}/actions`);
+  try {
+    fbActionsSource = new EventSource(`${FIREBASE_DB_URL}/live_games/${code}/actions.json`);
+    fbActionsSource.onmessage = (e) => {
+      try {
+        const payload = JSON.parse(e.data);
+        if (payload && payload.data) {
+          // Firebase SSE can send an object of items or single item
+          const dataObj = payload.data;
+          if (dataObj.msg && dataObj.fromId && dataObj.fromId !== myId) {
+            processHostMessage(dataObj.msg, dataObj.fromId);
+          } else {
+            Object.values(dataObj).forEach(item => {
+              if (item && item.msg && item.fromId && item.fromId !== myId) {
+                processHostMessage(item.msg, item.fromId);
+              }
+            });
+          }
+        }
+      } catch(err){}
+    };
+  } catch(err){}
+}
+
+function startGuestFirebaseListener(code) {
+  if (fbStateSource) fbStateSource.close();
+  try {
+    fbStateSource = new EventSource(`${FIREBASE_DB_URL}/live_games/${code}/state.json`);
+    fbStateSource.onmessage = (e) => {
+      try {
+        const payload = JSON.parse(e.data);
+        if (payload && payload.data) {
+          handleMessage(payload.data);
+        }
+      } catch(err){}
+    };
+  } catch(err){}
+}
+
 function broadcastToAll(msg) {
-  // host sends to all guests
+  // 1. WebRTC DataChannel send
   guestConns.forEach(c => { try { c.send(msg); } catch(e){} });
+  // 2. Firebase Cloud relay (guarantees cross-ISP connectivity)
+  if (roomCode) {
+    fbWrite(`live_games/${roomCode}/state`, msg);
+  }
 }
 
 function sendToHost(msg) {
+  // 1. WebRTC DataChannel send
   if (hostConn && hostConn.open) try { hostConn.send(msg); } catch(e){}
+  // 2. Firebase Cloud relay
+  if (roomCode) {
+    fetch(`${FIREBASE_DB_URL}/live_games/${roomCode}/actions.json`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ msg, fromId: myId })
+    }).catch(()=>{});
+  }
 }
 
 // ─── Slot Validation ──────────────────────────────────────────────────────────
@@ -756,9 +813,11 @@ async function createRoom() {
   };
 
   peer.on('connection', (conn) => { attachGuestConn(conn); });
+  startHostFirebaseListener(roomCode);
 
   window.addEventListener('beforeunload', () => {
     fbDelete(`room_index/${roomCode}`);
+    fbDelete(`live_games/${roomCode}`);
     fbPatch(roomPath, { status: 'closed' });
   });
 
@@ -800,41 +859,40 @@ async function joinRoom() {
     return;
   }
 
-  document.getElementById('lobbyError').innerText = '🔄 Connecting to host...';
+  document.getElementById('lobbyError').innerText = '🔄 Connecting...';
   peer = await initPeer(`gg-guest-${Date.now()}`);
-  if (!peer) { document.getElementById('lobbyError').innerText='❌ Connection failed. Try again.'; return; }
-  myId = peer.id;
+  myId = peer ? peer.id : `gg-guest-fb-${Date.now()}`;
   isHost = false;
 
-  const conn = peer.connect(hostPeerId, {
-    metadata: { name: playerName },
-    reliable: true,
-    serialization: 'json',
-    config: ICE_SERVERS
-  });
-  hostConn = conn;
-  let connected = false;
+  // Immediately start listening to Firebase state & join waiting room
+  startGuestFirebaseListener(code);
+  document.getElementById('lobbyError').innerText='';
+  document.getElementById('displayRoomCode').innerText = code;
+  document.getElementById('matchTimeSelect').disabled=true;
+  document.getElementById('maxPlayersSelect').disabled=true;
+  document.getElementById('aiGoalkeepersSelect').disabled=true;
+  document.getElementById('ballSpeedSelect').disabled=true;
+  document.getElementById('startMatchBtn').style.display='none';
+  document.getElementById('lobbyMenu').classList.add('hidden');
+  document.getElementById('waitingRoom').classList.remove('hidden');
 
-  conn.on('open', () => {
-    connected = true;
-    document.getElementById('lobbyError').innerText='';
-    document.getElementById('displayRoomCode').innerText = code;
-    document.getElementById('matchTimeSelect').disabled=true;
-    document.getElementById('maxPlayersSelect').disabled=true;
-    document.getElementById('aiGoalkeepersSelect').disabled=true;
-    document.getElementById('ballSpeedSelect').disabled=true;
-    document.getElementById('startMatchBtn').style.display='none';
-    document.getElementById('lobbyMenu').classList.add('hidden');
-    document.getElementById('waitingRoom').classList.remove('hidden');
-    conn.send({ type:'guest-join' });
-  });
-  conn.on('data', (msg) => { handleMessage(msg); });
-  conn.on('close', () => { document.getElementById('lobbyError').innerText='Disconnected from room.'; });
-  conn.on('error', (err) => { document.getElementById('lobbyError').innerText='Connection error. Try again.'; });
-  
-  setTimeout(() => {
-    if (!connected) document.getElementById('lobbyError').innerText='❌ Could not reach host. They may have left or changed network.';
-  }, 15000);
+  // Send join request via Firebase cloud relay
+  sendToHost({ type:'guest-join' });
+
+  // Parallel WebRTC connection attempt
+  if (peer && hostPeerId) {
+    const conn = peer.connect(hostPeerId, {
+      metadata: { name: playerName },
+      reliable: true,
+      serialization: 'json',
+      config: ICE_SERVERS
+    });
+    hostConn = conn;
+    conn.on('open', () => {
+      conn.send({ type:'guest-join' });
+    });
+    conn.on('data', (msg) => { handleMessage(msg); });
+  }
 }
 
 
