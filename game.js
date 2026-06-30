@@ -636,18 +636,32 @@ function handleMessage(msg) {
       const hasB = rs.players.some(p=>p.slot.startsWith('teamB'));
       const startBtn = document.getElementById('startMatchBtn');
       if (isHost) {
-        startBtn.style.display='block'; startBtn.disabled=!(hasA&&hasB);
-        ['matchTimeSelect','maxPlayersSelect','aiGoalkeepersSelect','ballSpeedSelect','aiGkLevelSelect','aiPlayerLevelSelect'].forEach(id=>document.getElementById(id).disabled=false);
+        if (startBtn) { startBtn.style.display='block'; startBtn.disabled=!(hasA&&hasB); }
+        ['matchTimeSelect','maxPlayersSelect','aiGoalkeepersSelect','ballSpeedSelect','aiGkLevelSelect','aiPlayerLevelSelect'].forEach(id=>{
+          const el = document.getElementById(id);
+          if (el) el.disabled = false;
+        });
       } else {
-        startBtn.style.display='none';
-        ['matchTimeSelect','maxPlayersSelect','aiGoalkeepersSelect','ballSpeedSelect','aiGkLevelSelect','aiPlayerLevelSelect'].forEach(id=>document.getElementById(id).disabled=true);
+        if (startBtn) { startBtn.style.display='none'; }
+        ['matchTimeSelect','maxPlayersSelect','aiGoalkeepersSelect','ballSpeedSelect','aiGkLevelSelect','aiPlayerLevelSelect'].forEach(id=>{
+          const el = document.getElementById(id);
+          if (el) el.disabled = true;
+        });
       }
-      document.getElementById('matchTimeSelect').value    = rs.matchTime.toString();
-      document.getElementById('maxPlayersSelect').value   = rs.maxPlayers.toString();
-      document.getElementById('aiGoalkeepersSelect').value= rs.aiGoalkeepers.toString();
-      document.getElementById('ballSpeedSelect').value    = rs.ballSpeedLimit.toString();
-      document.getElementById('aiGkLevelSelect').value    = rs.aiGkLevel || 'medium';
-      document.getElementById('aiPlayerLevelSelect').value = rs.aiPlayerLevel || 'medium';
+      
+      const mtEl = document.getElementById('matchTimeSelect');
+      if (mtEl) mtEl.value = rs.matchTime.toString();
+      const mpEl = document.getElementById('maxPlayersSelect');
+      if (mpEl) mpEl.value = rs.maxPlayers.toString();
+      const agEl = document.getElementById('aiGoalkeepersSelect');
+      if (agEl) agEl.value = rs.aiGoalkeepers.toString();
+      const bsEl = document.getElementById('ballSpeedSelect');
+      if (bsEl) bsEl.value = rs.ballSpeedLimit.toString();
+      const aglEl = document.getElementById('aiGkLevelSelect');
+      if (aglEl) aglEl.value = rs.aiGkLevel || 'medium';
+      const aplEl = document.getElementById('aiPlayerLevelSelect');
+      if (aplEl) aplEl.value = rs.aiPlayerLevel || 'medium';
+      
       updateWaitingRoomUI(rs);
       break;
     }
@@ -1133,8 +1147,11 @@ async function createRoom() {
   document.getElementById('maxPlayersSelect').disabled=false;
   document.getElementById('aiGoalkeepersSelect').disabled=false;
   document.getElementById('ballSpeedSelect').disabled=false;
-  document.getElementById('aiGkLevelSelect').disabled=false;
-  document.getElementById('aiPlayerLevelSelect').disabled=false;
+  const agkSelect = document.getElementById('aiGkLevelSelect');
+  if (agkSelect) agkSelect.disabled = false;
+  const aplSelect = document.getElementById('aiPlayerLevelSelect');
+  if (aplSelect) aplSelect.disabled = false;
+  
   document.getElementById('startMatchBtn').style.display='block';
   updateWaitingRoomUI(roomState);
   document.getElementById('lobbyMenu').classList.add('hidden');
@@ -1214,8 +1231,12 @@ async function joinRoom() {
   document.getElementById('maxPlayersSelect').disabled=true;
   document.getElementById('aiGoalkeepersSelect').disabled=true;
   document.getElementById('ballSpeedSelect').disabled=true;
-  document.getElementById('aiGkLevelSelect').disabled=true;
-  document.getElementById('aiPlayerLevelSelect').disabled=true;
+  
+  const agkSel = document.getElementById('aiGkLevelSelect');
+  if (agkSel) agkSel.disabled = true;
+  const aplSel = document.getElementById('aiPlayerLevelSelect');
+  if (aplSel) aplSel.disabled = true;
+  
   document.getElementById('startMatchBtn').style.display='none';
   document.getElementById('lobbyMenu').classList.add('hidden');
   document.getElementById('waitingRoom').classList.remove('hidden');
