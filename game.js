@@ -157,6 +157,7 @@ function cleanRoomState(state) {
     timeRemaining:state.timeRemaining,
     scores:       state.scores,
     gameState:    state.gameState,
+    countdownRemaining: state.countdownRemaining || 0,
     ball: { x:state.ball.x, y:state.ball.y, vx:state.ball.vx, vy:state.ball.vy, radius:state.ball.radius }
   };
 }
@@ -497,7 +498,13 @@ function updateOutfieldAI(rs) {
       let tx, ty;
       if (p === chaser) {
         const offsetX = isA ? -30 : 30;
-        tx = b.x + offsetX; ty = b.y;
+        tx = b.x + offsetX;
+        
+        // Dynamic curving/weaving path when close to the ball (dribble-style winding path)
+        const distToBall = Math.hypot(b.x - p.x, b.y - p.y);
+        const curveFactor = Math.max(0, Math.min(1, (300 - distToBall) / 200));
+        const curveOffset = Math.sin(Date.now() / 250) * 50 * curveFactor;
+        ty = b.y + curveOffset;
       } else if (p.slot.includes('defender')) {
         tx = isA ? 320 : 1150;
         ty = Math.max(250, Math.min(600, b.y));
@@ -678,7 +685,17 @@ function handleMessage(msg) {
       document.getElementById('playerStatsPanel').classList.remove('hidden');
       canvas.classList.remove('hidden');
       particles=[]; ballTrail=[]; netDeformationL.fill(0); netDeformationR.fill(0);
-      resizeCanvas(); sound.playWhistle();
+      resizeCanvas();
+      break;
+    }
+    case 'countdown-tick': {
+      if (msg.count > 0) {
+        showAnnouncement(msg.count.toString());
+        sound.playWhistle(0.08); // Short countdown beep whistle
+      } else {
+        showAnnouncement('GO!');
+        sound.playWhistle(0.45); // Full match start whistle
+      }
       break;
     }
     case 'physics-tick': {
@@ -848,7 +865,7 @@ function processHostMessage(msg, fromId) {
     case 'start-match': {
       const host=rs.players.find(p=>p.id===fromId);
       if (!host||!host.isHost) return;
-      rs.gameState='playing'; rs.timeRemaining=rs.matchTime;
+      rs.gameState='countdown'; rs.countdownRemaining=3; rs.timeRemaining=rs.matchTime;
       rs.scores={A:0,B:0}; rs.ball.x=PITCH_WIDTH/2; rs.ball.y=PITCH_HEIGHT/2;
       rs.ball.vx=0; rs.ball.vy=0; lastTouchedBy=null;
       rs.players.forEach(p=>{ p.stats={touches:0,goals:0}; });
@@ -860,15 +877,34 @@ function processHostMessage(msg, fromId) {
       rs.players.forEach(p=>{ const pos=getStartPos(p.slot); p.x=pos.x; p.y=pos.y; p.vx=0; p.vy=0; });
       const startMsg={type:'match-started', roomState:cleanRoomState(rs)};
       broadcastToAll(startMsg); handleMessage(startMsg);
-      // Start physics & timer
+      // Start physics ticks
       if (physicsIntervalId) clearInterval(physicsIntervalId);
       physicsIntervalId=setInterval(()=>hostPhysicsTick(rs),16);
+      
+      // Start countdown sequence
       if (timerIntervalId) clearInterval(timerIntervalId);
+      const tick3Msg = {type:'countdown-tick', count:3};
+      broadcastToAll(tick3Msg); handleMessage(tick3Msg);
+      
+      let count = 3;
       timerIntervalId=setInterval(()=>{
-        rs.timeRemaining--;
-        const tMsg={type:'timer-updated', timeRemaining:rs.timeRemaining};
-        broadcastToAll(tMsg); handleMessage(tMsg);
-        if (rs.timeRemaining<=0) hostEndGame(rs);
+        count--;
+        if (count > 0) {
+          const cMsg={type:'countdown-tick', count};
+          broadcastToAll(cMsg); handleMessage(cMsg);
+        } else if (count === 0) {
+          rs.gameState='playing';
+          const cMsg={type:'countdown-tick', count:0};
+          broadcastToAll(cMsg); handleMessage(cMsg);
+          
+          clearInterval(timerIntervalId);
+          timerIntervalId=setInterval(()=>{
+            rs.timeRemaining--;
+            const tMsg={type:'timer-updated', timeRemaining:rs.timeRemaining};
+            broadcastToAll(tMsg); handleMessage(tMsg);
+            if (rs.timeRemaining<=0) hostEndGame(rs);
+          },1000);
+        }
       },1000);
       break;
     }
