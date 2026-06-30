@@ -145,6 +145,24 @@
                 <option value="10">Slow (10)</option>
               </select>
             </div>
+
+            <div class="lobby-config-wrap">
+              <span class="config-label">ai gk level</span>
+              <select id="aiGkLevelSelect" onchange="changeAiGkLevel(this.value)">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+
+            <div class="lobby-config-wrap">
+              <span class="config-label">ai player level</span>
+              <select id="aiPlayerLevelSelect" onchange="changeAiPlayerLevel(this.value)">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
           </div>
         </div>
 

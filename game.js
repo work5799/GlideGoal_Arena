@@ -151,6 +151,8 @@ function cleanRoomState(state) {
     matchTime:   state.matchTime,
     maxPlayers:  state.maxPlayers,
     aiGoalkeepers:state.aiGoalkeepers,
+    aiGkLevel:   state.aiGkLevel || 'medium',
+    aiPlayerLevel:state.aiPlayerLevel || 'medium',
     ballSpeedLimit:state.ballSpeedLimit,
     timeRemaining:state.timeRemaining,
     scores:       state.scores,
@@ -270,18 +272,26 @@ function startHostSync(code) {
         const initialCount = roomState.players.length;
         roomState.players = roomState.players.filter(p => {
           if (p.isHost || p.isAI) return true;
-          // Grace period: new joins have 12s immunity
-          if (p.joinedAt && (now - p.joinedAt < 12000)) return true;
+          
+          // 1. WebRTC connection check - keep if active DataChannel exists
+          const hasWebRTC = guestConns.some(conn => {
+            const guestId = conn.metadata?.guestId || conn.peer;
+            return guestId === p.id && conn.open;
+          });
+          if (hasWebRTC) return true;
+
+          // 2. Fallback to Firebase Heartbeat with increased limit (30s)
+          if (p.joinedAt && (now - p.joinedAt < 30000)) return true;
           const rawHb = hbs[p.id];
           const lastHbTime = (typeof rawHb === 'object' && rawHb !== null) ? rawHb.time : rawHb;
           if (lastHbTime) {
-            if (now - lastHbTime > 12000) {
+            if (now - lastHbTime > 30000) {
               changed = true;
               return false;
             }
             return true;
           }
-          if (p.joinedAt && (now - p.joinedAt >= 12000)) {
+          if (p.joinedAt && (now - p.joinedAt >= 30000)) {
             changed = true;
             return false;
           }
@@ -404,24 +414,45 @@ function getStartPos(slot) {
 // ─── Host-side Physics ────────────────────────────────────────────────────────
 function updateAiGoalkeepers(rs) {
   const b = rs.ball;
+  const level = rs.aiGkLevel || 'medium';
+  
+  // Set difficulty metrics
+  let speed = 5.2;
+  let chargeRange = 360;
+  let interpRate = 0.8;
+  
+  if (level === 'low') {
+    speed = 3.2;
+    chargeRange = 300;
+    interpRate = 0.55;
+  } else if (level === 'high') {
+    speed = 9.0;
+    chargeRange = 420;
+    interpRate = 1.0;
+  }
+
   rs.players.forEach(p => {
     if (!p.isAI) return;
-    let tx, ty, speed = 9.0;
+    let tx, ty;
     if (p.slot === 'teamA_gk') {
-      const inZone = b.x < 400 && b.y >= 180 && b.y <= 670;
+      const inZone = b.x < chargeRange && b.y >= 200 && b.y <= 650;
       if (inZone) {
-        tx = b.x - 20; ty = b.y;
+        tx = b.x - 25; ty = b.y;
       } else {
-        tx = 160; ty = Math.max(280, Math.min(570, 425 + (b.y - 425) * 0.5));
+        tx = 160; ty = Math.max(290, Math.min(560, 425 + (b.y - 425) * 0.4));
       }
     } else if (p.slot === 'teamB_gk') {
-      const inZone = b.x > 1070 && b.y >= 180 && b.y <= 670;
+      const inZone = b.x > (PITCH_WIDTH - chargeRange) && b.y >= 200 && b.y <= 650;
       if (inZone) {
-        tx = b.x + 20; ty = b.y;
+        tx = b.x + 25; ty = b.y;
       } else {
-        tx = 1310; ty = Math.max(280, Math.min(570, 425 + (b.y - 425) * 0.5));
+        tx = 1310; ty = Math.max(290, Math.min(560, 425 + (b.y - 425) * 0.4));
       }
     } else { return; }
+    
+    // Smooth/damped vertical tracking to prevent instant snap
+    ty = p.y + (ty - p.y) * interpRate;
+    
     const dx = tx - p.x, dy = ty - p.y, dist = Math.hypot(dx, dy);
     if (dist > 1) {
       const ms = Math.min(speed, dist);
@@ -433,6 +464,22 @@ function updateAiGoalkeepers(rs) {
 
 function updateOutfieldAI(rs) {
   const b = rs.ball;
+  const level = rs.aiPlayerLevel || 'medium';
+  
+  let chaserSpeed = 4.8;
+  let supportSpeed = 3.2;
+  let interpRate = 0.85;
+  
+  if (level === 'low') {
+    chaserSpeed = 3.0;
+    supportSpeed = 2.0;
+    interpRate = 0.65;
+  } else if (level === 'high') {
+    chaserSpeed = 8.5;
+    supportSpeed = 6.0;
+    interpRate = 1.0;
+  }
+
   const teamAPlayers = rs.players.filter(p => p.isAI && p.slot.startsWith('teamA') && p.slot !== 'teamA_gk');
   const teamBPlayers = rs.players.filter(p => p.isAI && p.slot.startsWith('teamB') && p.slot !== 'teamB_gk');
 
@@ -446,7 +493,7 @@ function updateOutfieldAI(rs) {
     });
 
     teamList.forEach(p => {
-      const speed = p === chaser ? 8.5 : 6.0;
+      const speed = p === chaser ? chaserSpeed : supportSpeed;
       let tx, ty;
       if (p === chaser) {
         const offsetX = isA ? -30 : 30;
@@ -464,6 +511,11 @@ function updateOutfieldAI(rs) {
 
       tx = Math.max(BOUNDS.xMin + 15, Math.min(BOUNDS.xMax - 15, tx));
       ty = Math.max(BOUNDS.yMin + 15, Math.min(BOUNDS.yMax - 15, ty));
+      
+      // Introduce human-like reaction lag (interpolation)
+      tx = p.x + (tx - p.x) * interpRate;
+      ty = p.y + (ty - p.y) * interpRate;
+
       const dx = tx - p.x, dy = ty - p.y, dist = Math.hypot(dx, dy);
       if (dist > 2) {
         const ms = Math.min(speed, dist);
@@ -585,15 +637,17 @@ function handleMessage(msg) {
       const startBtn = document.getElementById('startMatchBtn');
       if (isHost) {
         startBtn.style.display='block'; startBtn.disabled=!(hasA&&hasB);
-        ['matchTimeSelect','maxPlayersSelect','aiGoalkeepersSelect','ballSpeedSelect'].forEach(id=>document.getElementById(id).disabled=false);
+        ['matchTimeSelect','maxPlayersSelect','aiGoalkeepersSelect','ballSpeedSelect','aiGkLevelSelect','aiPlayerLevelSelect'].forEach(id=>document.getElementById(id).disabled=false);
       } else {
         startBtn.style.display='none';
-        ['matchTimeSelect','maxPlayersSelect','aiGoalkeepersSelect','ballSpeedSelect'].forEach(id=>document.getElementById(id).disabled=true);
+        ['matchTimeSelect','maxPlayersSelect','aiGoalkeepersSelect','ballSpeedSelect','aiGkLevelSelect','aiPlayerLevelSelect'].forEach(id=>document.getElementById(id).disabled=true);
       }
       document.getElementById('matchTimeSelect').value    = rs.matchTime.toString();
       document.getElementById('maxPlayersSelect').value   = rs.maxPlayers.toString();
       document.getElementById('aiGoalkeepersSelect').value= rs.aiGoalkeepers.toString();
       document.getElementById('ballSpeedSelect').value    = rs.ballSpeedLimit.toString();
+      document.getElementById('aiGkLevelSelect').value    = rs.aiGkLevel || 'medium';
+      document.getElementById('aiPlayerLevelSelect').value = rs.aiPlayerLevel || 'medium';
       updateWaitingRoomUI(rs);
       break;
     }
@@ -746,6 +800,18 @@ function processHostMessage(msg, fromId) {
       const host=rs.players.find(p=>p.id===fromId);
       if (!host||!host.isHost) return;
       rs.ballSpeedLimit=parseInt(msg.ballSpeed,10)||20;
+      broadcastRoomState(); break;
+    }
+    case 'update-ai-gk-level': {
+      const host=rs.players.find(p=>p.id===fromId);
+      if (!host||!host.isHost) return;
+      rs.aiGkLevel=msg.aiGkLevel || 'medium';
+      broadcastRoomState(); break;
+    }
+    case 'update-ai-player-level': {
+      const host=rs.players.find(p=>p.id===fromId);
+      if (!host||!host.isHost) return;
+      rs.aiPlayerLevel=msg.aiPlayerLevel || 'medium';
       broadcastRoomState(); break;
     }
     case 'add-ai-slot-player': {
@@ -1045,6 +1111,7 @@ async function createRoom() {
       stats:{touches:0,goals:0}
     }],
     matchTime:60, maxPlayers:2, aiGoalkeepers:false,
+    aiGkLevel: 'medium', aiPlayerLevel: 'medium',
     ballSpeedLimit:20, timeRemaining:60,
     scores:{A:0,B:0}, gameState:'lobby',
     ball:{x:PITCH_WIDTH/2, y:PITCH_HEIGHT/2, vx:0, vy:0, radius:18, damping:0.988}
@@ -1066,6 +1133,8 @@ async function createRoom() {
   document.getElementById('maxPlayersSelect').disabled=false;
   document.getElementById('aiGoalkeepersSelect').disabled=false;
   document.getElementById('ballSpeedSelect').disabled=false;
+  document.getElementById('aiGkLevelSelect').disabled=false;
+  document.getElementById('aiPlayerLevelSelect').disabled=false;
   document.getElementById('startMatchBtn').style.display='block';
   updateWaitingRoomUI(roomState);
   document.getElementById('lobbyMenu').classList.add('hidden');
@@ -1118,6 +1187,7 @@ async function joinRoom() {
         stats: { touches: 0, goals: 0 }, joinedAt: Date.now() - 5000
       }],
       matchTime: 60, maxPlayers: 2, aiGoalkeepers: false,
+      aiGkLevel: 'medium', aiPlayerLevel: 'medium',
       ballSpeedLimit: 20, timeRemaining: 60,
       scores: { A: 0, B: 0 }, gameState: 'lobby',
       ball: { x: 650, y: 400, vx: 0, vy: 0, radius: 18 }
@@ -1144,6 +1214,8 @@ async function joinRoom() {
   document.getElementById('maxPlayersSelect').disabled=true;
   document.getElementById('aiGoalkeepersSelect').disabled=true;
   document.getElementById('ballSpeedSelect').disabled=true;
+  document.getElementById('aiGkLevelSelect').disabled=true;
+  document.getElementById('aiPlayerLevelSelect').disabled=true;
   document.getElementById('startMatchBtn').style.display='none';
   document.getElementById('lobbyMenu').classList.add('hidden');
   document.getElementById('waitingRoom').classList.remove('hidden');
@@ -1189,6 +1261,16 @@ function changeAiGoalkeepers(val) {
 function changeBallSpeed(val) {
   if (!isHost) return;
   const msg={type:'update-ball-speed',ballSpeed:val};
+  processHostMessage(msg,myId);
+}
+function changeAiGkLevel(val) {
+  if (!isHost) return;
+  const msg={type:'update-ai-gk-level',aiGkLevel:val};
+  processHostMessage(msg,myId);
+}
+function changeAiPlayerLevel(val) {
+  if (!isHost) return;
+  const msg={type:'update-ai-player-level',aiPlayerLevel:val};
   processHostMessage(msg,myId);
 }
 function joinSlot(slot) {
